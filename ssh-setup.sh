@@ -38,8 +38,13 @@ sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.$(date +%Y%m%d_%H%M%S)
 # Get current user
 CURRENT_USER=$(whoami)
 
-# Get server hostname
-SERVER_HOSTNAME=$(hostname)
+# Get server hostname (simplified)
+SERVER_HOSTNAME=$(hostname | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+
+# If server hostname is empty, use a default
+if [ -z "$SERVER_HOSTNAME" ]; then
+    SERVER_HOSTNAME="server"
+fi
 
 # Ask for SSH port
 print_message "Varsayılan SSH portu: 22" "$YELLOW"
@@ -68,61 +73,60 @@ case $AUTH_CHOICE in
         # SSH Key authentication
         print_message "SSH Anahtarı ile giriş seçildi." "$GREEN"
         
-        # Generate new SSH key pair
+        # Generate new SSH key pair with minimal names
+        KEY_NAME="$SERVER_HOSTNAME"
+        KEY_PATH="$HOME/.ssh/$KEY_NAME"
+        
         print_message "Yeni SSH anahtar çifti oluşturuluyor..." "$BLUE"
-        KEY_NAME="id_ed25519_${SERVER_HOSTNAME}_$(date +%Y%m%d)"
+        
+        # Remove existing keys if they exist
+        rm -f "$KEY_PATH" "$KEY_PATH.pub"
         
         # Generate Ed25519 key (best practice)
-        ssh-keygen -t ed25519 -f ~/.ssh/${KEY_NAME} -N "" -C "ssh-key-for-${SERVER_HOSTNAME}-$(date +%Y-%m-%d)"
+        ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "$CURRENT_USER@$SERVER_HOSTNAME-$(date +%Y-%m-%d)"
         
-        # Set proper permissions
+        # Set proper permissions (important for SSH!)
         chmod 700 ~/.ssh
-        chmod 600 ~/.ssh/${KEY_NAME}
-        chmod 644 ~/.ssh/${KEY_NAME}.pub
+        chmod 600 "$KEY_PATH"
+        chmod 644 "$KEY_PATH.pub"
         
         # Add public key to authorized_keys
-        cat ~/.ssh/${KEY_NAME}.pub >> ~/.ssh/authorized_keys
+        cat "$KEY_PATH.pub" >> ~/.ssh/authorized_keys
         chmod 600 ~/.ssh/authorized_keys
         
         # Configure SSH for key auth only
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
         sudo sed -i 's/PasswordAuthentication yes/#PasswordAuthentication yes/g' /etc/ssh/sshd_config
         
-        # Create SSH config for easier connection
-        SSH_CONFIG_ENTRY="Host ${SERVER_HOSTNAME}
+        # Create a simple SSH config entry
+        SSH_CONFIG_ENTRY="Host $SERVER_HOSTNAME
     HostName %h
-    User ${CURRENT_USER}
-    Port ${SSH_PORT}
-    IdentityFile ~/.ssh/${KEY_NAME}
-    IdentitiesOnly yes"
+    User $CURRENT_USER
+    IdentityFile ~/.ssh/$KEY_NAME"
         
-        print_message "\nSSH anahtar çifti başarıyla oluşturuldu!" "$GREEN"
+        if [ "$SSH_PORT" != "22" ]; then
+            SSH_CONFIG_ENTRY="$SSH_CONFIG_ENTRY
+    Port $SSH_PORT"
+        fi
+        
+        print_message "\n✅ SSH anahtar çifti başarıyla oluşturuldu!" "$GREEN"
         print_message "┌──────────────────────────────────────────────────────┐" "$PURPLE"
         print_message "│                   SSH KEY BİLGİLERİ                  │" "$PURPLE"
         print_message "└──────────────────────────────────────────────────────┘" "$PURPLE"
-        print_message "Public Key Dosyası:  ~/.ssh/${KEY_NAME}.pub" "$CYAN"
-        print_message "Private Key Dosyası: ~/.ssh/${KEY_NAME}" "$CYAN"
-        print_message "Key Tipi:            ED25519 (en güvenli)" "$CYAN"
+        print_message "• Private Key: ~/.ssh/$KEY_NAME" "$CYAN"
+        print_message "• Public Key:  ~/.ssh/$KEY_NAME.pub" "$CYAN"
+        print_message "• Public Key sunucuya kaydedildi: ~/.ssh/authorized_keys" "$CYAN"
+        print_message "• Key Tipi: ED25519 (en güvenli)" "$CYAN"
         
         # Display private key with clear formatting
         print_message "\n┌──────────────────────────────────────────────────────┐" "$PURPLE"
         print_message "│                  PRIVATE KEY İÇERİĞİ                 │" "$PURPLE"
         print_message "└──────────────────────────────────────────────────────┘" "$PURPLE"
-        print_message "AŞAĞIDAKİ TÜM SATIRLARI KOPYALAYIN:" "$RED"
+        print_message "⚠️  AŞAĞIDAKİ TÜM SATIRLARI KOPYALAYIN VE KAYDEDİN ⚠️" "$RED"
         echo ""
-        cat ~/.ssh/${KEY_NAME}
+        cat "$KEY_PATH"
         echo ""
-        print_message "YUKARIDAKİ TÜM SATIRLARI KOPYALAYIN" "$RED"
-        
-        print_message "\n┌──────────────────────────────────────────────────────┐" "$PURPLE"
-        print_message "│               KURULUM TALİMATLARI                    │" "$PURPLE"
-        print_message "└──────────────────────────────────────────────────────┘" "$PURPLE"
-        print_message "1. Private key'i kendi bilgisayarınıza kaydedin:" "$CYAN"
-        print_message "   nano ~/.ssh/${KEY_NAME}" "$YELLOW"
-        print_message "2. Dosya izinlerini ayarlayın:" "$CYAN"
-        print_message "   chmod 600 ~/.ssh/${KEY_NAME}" "$YELLOW"
-        print_message "3. SSH config dosyasına ekleyin (~/.ssh/config):" "$CYAN"
-        print_message "   ${SSH_CONFIG_ENTRY}" "$YELLOW"
+        print_message "⚠️  YUKARIDAKİ TÜM SATIRLARI KOPYALAYIN VE KAYDEDİN ⚠️" "$RED"
         
         AUTH_METHOD="SSH Anahtarı"
         ;;
@@ -195,63 +199,93 @@ print_message "• Genel IP:        $PUBLIC_IP" "$CYAN"
 print_message "• SSH Port:        $SSH_PORT" "$CYAN"
 print_message "• Kullanıcı:       $CURRENT_USER" "$CYAN"
 print_message "• Kimlik Doğrulama: $AUTH_METHOD" "$CYAN"
+
+if [ "$AUTH_METHOD" = "SSH Anahtarı" ]; then
+    print_message "• Anahtar Çifti:    $KEY_NAME ve $KEY_NAME.pub" "$CYAN"
+    print_message "• Public Key Yeri:  ~/.ssh/authorized_keys" "$CYAN"
+fi
 echo ""
 
-# Display connection commands
+# Display connection instructions
 if [ "$AUTH_METHOD" = "SSH Anahtarı" ]; then
-    print_message "BAĞLANTI SEÇENEKLERİ:" "$GREEN"
-    echo ""
+    print_message "┌──────────────────────────────────────────────────────┐" "$PURPLE"
+    print_message "│              KURULUM TALİMATLARI                    │" "$PURPLE"
+    print_message "└──────────────────────────────────────────────────────┘" "$PURPLE"
     
-    # Option 1: With SSH config
-    print_message "1. SSH Config kullanarak (tavsiye edilen):" "$BLUE"
-    print_message "   ~/.ssh/config dosyanıza ekleyin:" "$YELLOW"
-    echo "   Host $SERVER_HOSTNAME"
-    echo "       HostName $IP_ADDRESS"
-    echo "       User $CURRENT_USER"
-    if [ "$SSH_PORT" != "22" ]; then
-        echo "       Port $SSH_PORT"
-    fi
-    echo "       IdentityFile ~/.ssh/${KEY_NAME}"
-    echo "       IdentitiesOnly yes"
-    echo ""
-    print_message "   Sonra basitçe çalıştırın:" "$YELLOW"
-    print_message "   ssh $SERVER_HOSTNAME" "$GREEN"
-    echo ""
+    print_message "\n📁 ADIM 1: Private Key'i İndirin" "$BLUE"
+    print_message "1. Yukarıdaki private key içeriğini kopyalayın" "$YELLOW"
+    print_message "2. Yerel bilgisayarınızda '$SERVER_HOSTNAME' klasörü oluşturun:" "$YELLOW"
+    print_message "   mkdir ~/'$SERVER_HOSTNAME'" "$GREEN"
+    print_message "3. Bu klasöre girin:" "$YELLOW"
+    print_message "   cd ~/'$SERVER_HOSTNAME'" "$GREEN"
+    print_message "4. '$KEY_NAME' adlı dosya oluşturun ve private key'i yapıştırın:" "$YELLOW"
+    print_message "   nano '$KEY_NAME'" "$GREEN"
+    print_message "5. Dosya izinlerini ayarlayın (ÖNEMLİ!):" "$YELLOW"
+    print_message "   chmod 600 '$KEY_NAME'" "$GREEN"
     
-    # Option 2: Direct connection
-    print_message "2. Direkt bağlantı:" "$BLUE"
+    print_message "\n🔑 ADIM 2: SSH Agent Kullanarak Bağlanın (TAVSIYE EDİLEN)" "$BLUE"
+    print_message "1. '$SERVER_HOSTNAME' klasöründe terminal açın" "$YELLOW"
+    print_message "2. SSH agent'ı başlatın ve anahtarı ekleyin:" "$YELLOW"
+    print_message "   eval \"\$(ssh-agent -s)\"" "$GREEN"
+    print_message "   ssh-add '$KEY_NAME'" "$GREEN"
+    print_message "3. Artık bağlanabilirsiniz:" "$YELLOW"
+    
     if [ "$SSH_PORT" = "22" ]; then
-        print_message "   ssh -i ~/.ssh/${KEY_NAME} $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        print_message "   ssh $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+            print_message "   veya:" "$BLUE"
+            print_message "   ssh $CURRENT_USER@$PUBLIC_IP" "$GREEN"
+        fi
     else
-        print_message "   ssh -i ~/.ssh/${KEY_NAME} -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS" "$GREEN"
-    fi
-    
-    if [ "$PUBLIC_IP" != "Bilinmiyor" ] && [ "$PUBLIC_IP" != "$IP_ADDRESS" ]; then
-        if [ "$SSH_PORT" = "22" ]; then
+        print_message "   ssh -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
             print_message "   veya:" "$BLUE"
-            print_message "   ssh -i ~/.ssh/${KEY_NAME} $CURRENT_USER@$PUBLIC_IP" "$GREEN"
-        else
-            print_message "   veya:" "$BLUE"
-            print_message "   ssh -i ~/.ssh/${KEY_NAME} -p $SSH_PORT $CURRENT_USER@$PUBLIC_IP" "$GREEN"
+            print_message "   ssh -p $SSH_PORT $CURRENT_USER@$PUBLIC_IP" "$GREEN"
         fi
     fi
     
-    print_message "\n⚠️  PRIVATE KEY'İ GÜVENLİ BİR YERE KAYDEDİN! ⚠️" "$RED"
-    print_message "Kaybettiğinizde sunucuya erişemezsiniz!" "$RED"
-else
-    print_message "BAĞLANTI KOMUTLARI:" "$GREEN"
-    echo ""
+    print_message "\n⚡ ADIM 3: Direkt -i ile Bağlanma (Alternatif)" "$BLUE"
+    print_message "1. '$SERVER_HOSTNAME' klasöründe terminal açın" "$YELLOW"
+    print_message "2. Doğrudan private key'i belirterek bağlanın:" "$YELLOW"
+    
     if [ "$SSH_PORT" = "22" ]; then
-        print_message "   ssh $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        print_message "   ssh -i '$KEY_NAME' $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+            print_message "   veya:" "$BLUE"
+            print_message "   ssh -i '$KEY_NAME' $CURRENT_USER@$PUBLIC_IP" "$GREEN"
+        fi
     else
-        print_message "   ssh -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        print_message "   ssh -i '$KEY_NAME' -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+            print_message "   veya:" "$BLUE"
+            print_message "   ssh -i '$KEY_NAME' -p $SSH_PORT $CURRENT_USER@$PUBLIC_IP" "$GREEN"
+        fi
     fi
     
-    if [ "$PUBLIC_IP" != "Bilinmiyor" ] && [ "$PUBLIC_IP" != "$IP_ADDRESS" ]; then
-        if [ "$SSH_PORT" = "22" ]; then
+    print_message "\n📝 NOT: SSH config dosyası kullanmak isterseniz:" "$BLUE"
+    print_message "~/.ssh/config dosyanıza şunu ekleyin:" "$YELLOW"
+    echo "Host $SERVER_HOSTNAME"
+    echo "    HostName $IP_ADDRESS"
+    echo "    User $CURRENT_USER"
+    if [ "$SSH_PORT" != "22" ]; then
+        echo "    Port $SSH_PORT"
+    fi
+    echo "    IdentityFile ~/$(echo $SERVER_HOSTNAME | sed 's/ /\\ /g')/$KEY_NAME"
+    
+    print_message "\nSonra sadece şunu çalıştırın:" "$YELLOW"
+    print_message "   ssh $SERVER_HOSTNAME" "$GREEN"
+    
+else
+    print_message "\n🔑 PAROLA İLE BAĞLANTI:" "$BLUE"
+    if [ "$SSH_PORT" = "22" ]; then
+        print_message "   ssh $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
             print_message "   veya:" "$BLUE"
             print_message "   ssh $CURRENT_USER@$PUBLIC_IP" "$GREEN"
-        else
+        fi
+    else
+        print_message "   ssh -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS" "$GREEN"
+        if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
             print_message "   veya:" "$BLUE"
             print_message "   ssh -p $SSH_PORT $CURRENT_USER@$PUBLIC_IP" "$GREEN"
         fi
@@ -266,5 +300,48 @@ print_message "• Root erişimi: DEVRE DIŞI" "$CYAN"
 print_message "• Güvenlik duvarı: AKTİF (sadece port $SSH_PORT açık)" "$CYAN"
 print_message "• Maksimum oturum: 5 eşzamanlı bağlantı" "$CYAN"
 print_message "• Bağlantı timeout: 10 dakika aktif kalmama" "$CYAN"
-print_message "\nAyarlar kalıcıdır ve sunucu yeniden başlatıldığında korunur." "$GREEN"
-print_message "\nKurulum tamamlandı! 🎉" "$GREEN"
+
+print_message "\n✅ Ayarlar kalıcıdır ve sunucu yeniden başlatıldığında korunur." "$GREEN"
+print_message "\n🎉 Kurulum tamamlandı!" "$GREEN"
+
+# Create a setup summary file
+SUMMARY_FILE="$HOME/ssh_setup_summary.txt"
+cat > "$SUMMARY_FILE" << EOF
+SSH Kurulum Özeti - $(date)
+===============================
+Sunucu Adı: $SERVER_HOSTNAME
+Yerel IP: $IP_ADDRESS
+Genel IP: $PUBLIC_IP
+SSH Port: $SSH_PORT
+Kullanıcı: $CURRENT_USER
+Kimlik Doğrulama: $AUTH_METHOD
+
+$(if [ "$AUTH_METHOD" = "SSH Anahtarı" ]; then
+echo "Anahtar Bilgileri:"
+echo "• Private Key: $KEY_NAME"
+echo "• Public Key: $KEY_NAME.pub"
+echo "• Public Key Konumu: ~/.ssh/authorized_keys"
+fi)
+
+Bağlantı Komutları:
+$(if [ "$AUTH_METHOD" = "SSH Anahtarı" ]; then
+    if [ "$SSH_PORT" = "22" ]; then
+        echo "ssh -i '$KEY_NAME' $CURRENT_USER@$IP_ADDRESS"
+    else
+        echo "ssh -i '$KEY_NAME' -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS"
+    fi
+else
+    if [ "$SSH_PORT" = "22" ]; then
+        echo "ssh $CURRENT_USER@$IP_ADDRESS"
+    else
+        echo "ssh -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS"
+    fi
+fi)
+
+Güvenlik Ayarları:
+• Fail2Ban: 3 başarısız girişte 1 saat ban
+• Root girişi: Kapalı
+• Güvenlik duvarı: Aktif
+EOF
+
+print_message "\n📄 Detaylı özet dosyası: $SUMMARY_FILE" "$BLUE"
