@@ -1,112 +1,198 @@
 #!/bin/bash
 
-# This script sets up SSH on a fresh Ubuntu Server LTS installation.
-# It installs OpenSSH server, configures the firewall, enables the service,
-# and optionally sets up key-based authentication for better security.
-# Best practices: Use UFW for firewall, enable on boot, suggest key auth.
-# Run this as root or with sudo.
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-set -e  # Exit on error
-
-# Function to check if running as root
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        echo "Please run this script as root or using sudo."
-        exit 1
-    fi
+# Function to print colored output
+print_message() {
+    echo -e "${2}${1}${NC}"
 }
 
-# Update system packages
-update_packages() {
-    echo "Updating package lists..."
-    apt update -y
-    apt upgrade -y
-}
+# Check if running as root
+if [[ $EUID -eq 0 ]]; then
+    print_message "Bu script root olarak çalıştırılmamalıdır. Normal kullanıcı ile çalıştırın." "$RED"
+    exit 1
+fi
 
-# Install OpenSSH server if not installed
-install_ssh() {
-    if ! dpkg -l | grep -q openssh-server; then
-        echo "Installing OpenSSH server..."
-        apt install openssh-server -y
-    else
-        echo "OpenSSH server is already installed."
-    fi
-}
+print_message "=== Ubuntu Server SSH Kurulum Scripti ===" "$BLUE"
+print_message "Bu script SSH erişimini güvenli şekilde yapılandıracaktır." "$YELLOW"
 
-# Enable and start SSH service
-enable_ssh() {
-    echo "Enabling and starting SSH service..."
-    systemctl enable ssh
-    systemctl start ssh
-    systemctl status ssh --no-pager
-}
+# Update system
+print_message "Sistem güncellemeleri yapılıyor..." "$BLUE"
+sudo apt update && sudo apt upgrade -y
 
-# Configure firewall (UFW)
-configure_firewall() {
-    if ! dpkg -l | grep -q ufw; then
-        echo "Installing UFW..."
-        apt install ufw -y
-    fi
+# Install required packages
+print_message "Gerekli paketler kuruluyor..." "$BLUE"
+sudo apt install -y openssh-server ufw fail2ban
 
-    echo "Configuring UFW to allow SSH..."
-    ufw allow OpenSSH
-    ufw --force enable
-    ufw status
-}
+# Backup original SSH config
+print_message "Mevcut SSH konfigürasyonu yedekleniyor..." "$BLUE"
+sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.$(date +%Y%m%d_%H%M%S)
 
-# Optional: Set up key-based authentication
-setup_key_auth() {
-    read -p "Do you want to set up SSH key-based authentication? (y/n): " choice
-    if [[ $choice =~ ^[Yy]$ ]]; then
-        echo "Generating SSH key pair if not exists..."
-        if [ ! -f ~/.ssh/id_rsa ]; then
-            ssh-keygen -t rsa -b 4096 -C "your_email@example.com" -N "" -f ~/.ssh/id_rsa
-        fi
+# Get current user
+CURRENT_USER=$(whoami)
 
-        echo "Adding public key to authorized_keys..."
+# Ask for SSH port
+print_message "Varsayılan SSH portu: 22" "$YELLOW"
+read -p "Kullanmak istediğiniz SSH portunu girin (22 için boş bırakın): " SSH_PORT
+SSH_PORT=${SSH_PORT:-22}
+
+# Ask for authentication method
+print_message "\nKimlik doğrulama yöntemi seçin:" "$BLUE"
+echo "1) Parola ile giriş (önerilmez, güvensiz)"
+echo "2) SSH Anahtarı ile giriş (önerilir, güvenli)"
+read -p "Seçiminiz (1/2): " AUTH_CHOICE
+
+case $AUTH_CHOICE in
+    1)
+        # Password authentication
+        print_message "Parola ile giriş seçildi." "$YELLOW"
+        print_message "ÖNEMLİ: Varsayılan parolanızı değiştirmeniz gerekecek!" "$RED"
+        sudo passwd $CURRENT_USER
+        
+        # Configure SSH for password auth
+        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+        sudo sed -i 's/PasswordAuthentication no/#PasswordAuthentication no/g' /etc/ssh/sshd_config
+        AUTH_METHOD="Parola"
+        ;;
+    2)
+        # SSH Key authentication
+        print_message "SSH Anahtarı ile giriş seçildi." "$GREEN"
+        
+        # Ask for public key
+        print_message "\nLütfen SSH public key'inizi girin:" "$BLUE"
+        print_message "(Genellikle ~/.ssh/id_rsa.pub veya ~/.ssh/id_ed25519.pub dosyasında bulunur)" "$YELLOW"
+        print_message "SSH key'inizi yapıştırın ve Ctrl+D tuşuna basın:" "$BLUE"
+        
+        # Read multi-line input for SSH key
+        SSH_KEY=$(cat)
+        
+        # Create .ssh directory if it doesn't exist
         mkdir -p ~/.ssh
+        
+        # Add key to authorized_keys
+        echo "$SSH_KEY" >> ~/.ssh/authorized_keys
+        
+        # Set proper permissions
         chmod 700 ~/.ssh
-        cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
         chmod 600 ~/.ssh/authorized_keys
+        
+        # Configure SSH for key auth only
+        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
+        sudo sed -i 's/PasswordAuthentication yes/#PasswordAuthentication yes/g' /etc/ssh/sshd_config
+        
+        # Generate new key pair for user if they want
+        read -p "Yeni SSH anahtar çifti oluşturmak istiyor musunuz? (y/N): " GENERATE_KEY
+        if [[ $GENERATE_KEY =~ ^[Yy]$ ]]; then
+            ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+            print_message "\nYeni SSH anahtarı oluşturuldu!" "$GREEN"
+            print_message "Private key: ~/.ssh/id_ed25519" "$YELLOW"
+            print_message "Public key: ~/.ssh/id_ed25519.pub" "$YELLOW"
+            print_message "\nPrivate key içeriği:" "$BLUE"
+            cat ~/.ssh/id_ed25519
+        fi
+        
+        AUTH_METHOD="SSH Anahtarı"
+        ;;
+    *)
+        print_message "Geçersiz seçim! SSH Anahtarı yöntemi kullanılacak." "$RED"
+        # Default to key auth
+        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
+        AUTH_METHOD="SSH Anahtarı"
+        ;;
+esac
 
-        echo "Disabling password authentication for security..."
-        sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-        sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-        systemctl restart ssh
+# Configure SSH security settings
+print_message "SSH güvenlik ayarları yapılandırılıyor..." "$BLUE"
 
-        echo "SSH key setup complete. Copy your private key (~/.ssh/id_rsa) to your client machine."
-        echo "Public IP: $(curl -s ifconfig.me)"
-    else
-        echo "Skipping key-based authentication setup."
+sudo tee -a /etc/ssh/sshd_config > /dev/null << EOF
+
+# Security enhancements added by SSH setup script
+Port $SSH_PORT
+PermitRootLogin no
+MaxAuthTries 3
+MaxSessions 5
+ClientAliveInterval 300
+ClientAliveCountMax 2
+X11Forwarding no
+AllowUsers $CURRENT_USER
+EOF
+
+# Configure UFW firewall
+print_message "Güvenlik duvarı (UFW) yapılandırılıyor..." "$BLUE"
+sudo ufw --force reset
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow $SSH_PORT/tcp
+sudo ufw --force enable
+
+# Configure Fail2Ban for SSH
+print_message "Fail2Ban yapılandırılıyor..." "$BLUE"
+sudo tee /etc/fail2ban/jail.local > /dev/null << EOF
+[sshd]
+enabled = true
+port = $SSH_PORT
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 3
+bantime = 3600
+EOF
+
+# Restart services
+print_message "Servisler yeniden başlatılıyor..." "$BLUE"
+sudo systemctl restart ssh
+sudo systemctl enable ssh
+sudo systemctl restart fail2ban
+sudo systemctl enable fail2ban
+
+# Get network information
+IP_ADDRESS=$(hostname -I | awk '{print $1}')
+PUBLIC_IP=$(curl -s icanhazip.com || echo "Bilinmiyor")
+
+# Display summary
+print_message "\n=== KURULUM TAMAMLANDI ===" "$GREEN"
+print_message "Aşağıdaki bilgilerle SSH bağlantısı yapabilirsiniz:" "$BLUE"
+echo "----------------------------------------"
+print_message "Yerel IP Adresi: $IP_ADDRESS" "$YELLOW"
+print_message "Genel IP Adresi: $PUBLIC_IP" "$YELLOW"
+print_message "SSH Port: $SSH_PORT" "$YELLOW"
+print_message "Kullanıcı Adı: $CURRENT_USER" "$YELLOW"
+print_message "Kimlik Doğrulama: $AUTH_METHOD" "$YELLOW"
+echo "----------------------------------------"
+
+# Display connection command
+if [ "$AUTH_METHOD" = "SSH Anahtarı" ]; then
+    print_message "\nBağlantı komutu:" "$GREEN"
+    echo "ssh -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS"
+    
+    if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+        echo "veya"
+        echo "ssh -p $SSH_PORT $CURRENT_USER@$PUBLIC_IP"
     fi
-}
-
-# Optional: Change SSH port for added security
-change_ssh_port() {
-    read -p "Do you want to change the default SSH port (22) for security? (y/n): " choice
-    if [[ $choice =~ ^[Yy]$ ]]; then
-        read -p "Enter new SSH port (e.g., 2222): " new_port
-        sed -i "s/#Port 22/Port $new_port/" /etc/ssh/sshd_config
-        sed -i "s/Port 22/Port $new_port/" /etc/ssh/sshd_config
-        ufw allow $new_port/tcp
-        ufw delete allow 22/tcp
-        systemctl restart ssh
-        echo "SSH port changed to $new_port. Update your client connections accordingly."
-    else
-        echo "Keeping default SSH port 22."
+    
+    print_message "\nPrivate key'i kaydettiğinizden emin olun!" "$RED"
+else
+    print_message "\nBağlantı komutu:" "$GREEN"
+    echo "ssh -p $SSH_PORT $CURRENT_USER@$IP_ADDRESS"
+    
+    if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+        echo "veya"
+        echo "ssh -p $SSH_PORT $CURRENT_USER@$PUBLIC_IP"
     fi
-}
+    
+    print_message "\nParola ile giriş yapacaksınız." "$YELLOW"
+fi
 
-# Main execution
-check_root
-update_packages
-install_ssh
-enable_ssh
-configure_firewall
-change_ssh_port
-setup_key_auth
+print_message "\nÖNEMLİ GÜVENLİK NOTLARI:" "$RED"
+echo "1. Private key'inizi asla paylaşmayın!"
+echo "2. Port değişikliği yaptıysanız, bağlantıda port belirtmeyi unutmayın"
+echo "3. Fail2Ban başarısız girişleri otomatik olarak banlayacaktır"
+echo "4. Root girişi devre dışı bırakıldı"
+echo "5. Güvenlik duvarı aktif edildi"
 
-echo "SSH setup complete! You can now connect via SSH from local network or internet."
-echo "Server IP: $(hostname -I | awk '{print $1}')"
-echo "Public IP (if applicable): $(curl -s ifconfig.me || echo 'Not detectable')"
-echo "Settings will persist after reboot."
+print_message "\nAyarlar kalıcıdır ve sunucu yeniden başlatıldığında korunur." "$GREEN"
+print_message "Kurulum tamamlandı!" "$GREEN"
