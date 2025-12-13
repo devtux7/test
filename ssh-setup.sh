@@ -73,67 +73,35 @@ case $AUTH_CHOICE in
         # SSH Key authentication
         print_message "SSH Anahtarı ile giriş seçildi." "$GREEN"
         
-        # Generate new SSH key pair with minimal names
         KEY_NAME="$SERVER_HOSTNAME"
         KEY_PATH="$HOME/.ssh/$KEY_NAME"
         
-        print_message "Yeni SSH anahtar çifti oluşturuluyor..." "$BLUE"
+        # Anahtar oluştur
+        ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "$CURRENT_USER@$SERVER_HOSTNAME"
         
-        # Remove existing keys if they exist
-        rm -f "$KEY_PATH" "$KEY_PATH.pub"
-        
-        # Generate Ed25519 key (best practice)
-        ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "$CURRENT_USER@$SERVER_HOSTNAME-$(date +%Y-%m-%d)"
-        
-        # Set proper permissions (important for SSH!)
-        chmod 700 ~/.ssh
-        chmod 600 "$KEY_PATH"
-        chmod 644 "$KEY_PATH.pub"
-        
-        # Add public key to authorized_keys
+        # Public key'i authorized_keys'e ekle
         cat "$KEY_PATH.pub" >> ~/.ssh/authorized_keys
-        chmod 600 ~/.ssh/authorized_keys
         
-        # Configure SSH for key auth only
-        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
-        sudo sed -i 's/PasswordAuthentication yes/#PasswordAuthentication yes/g' /etc/ssh/sshd_config
+        # Doğrulama bilgileri
+        KEY_CHECKSUM=$(sha256sum "$KEY_PATH" | awk '{print $1}')
+        KEY_BASE64=$(base64 -w 0 "$KEY_PATH")
         
-        # Create a simple SSH config entry
-        SSH_CONFIG_ENTRY="Host $SERVER_HOSTNAME
-    HostName %h
-    User $CURRENT_USER
-    IdentityFile ~/.ssh/$KEY_NAME"
+        print_message "\n🔐 PRIVATE KEY BİLGİLERİ:" "$PURPLE"
+        print_message "SHA256 Checksum: $KEY_CHECKSUM" "$CYAN"
         
-        if [ "$SSH_PORT" != "22" ]; then
-            SSH_CONFIG_ENTRY="$SSH_CONFIG_ENTRY
-    Port $SSH_PORT"
-        fi
+        print_message "\n📋 BASE64 ENCODE EDİLMİŞ PRIVATE KEY:" "$BLUE"
+        echo "$KEY_BASE64"
         
-        print_message "\n✅ SSH anahtar çifti başarıyla oluşturuldu!" "$GREEN"
-        print_message "┌──────────────────────────────────────────────────────┐" "$PURPLE"
-        print_message "│                   SSH KEY BİLGİLERİ                  │" "$PURPLE"
-        print_message "└──────────────────────────────────────────────────────┘" "$PURPLE"
-        print_message "• Private Key: ~/.ssh/$KEY_NAME" "$CYAN"
-        print_message "• Public Key:  ~/.ssh/$KEY_NAME.pub" "$CYAN"
-        print_message "• Public Key sunucuya kaydedildi: ~/.ssh/authorized_keys" "$CYAN"
-        print_message "• Key Tipi: ED25519 (en güvenli)" "$CYAN"
+        print_message "\n📥 KURULUM TALİMATLARI:" "$GREEN"
+        print_message "1. Yukarıdaki BASE64 kodunu kopyalayın" "$YELLOW"
+        print_message "2. Yerel bilgisayarınızda şu komutu çalıştırın:" "$YELLOW"
+        echo "   echo '$KEY_BASE64' | base64 -d > $KEY_NAME"
+        print_message "3. Dosya izinlerini ayarlayın:" "$YELLOW"
+        echo "   chmod 600 $KEY_NAME"
+        print_message "4. SHA256 kontrolü yapın:" "$YELLOW"
+        echo "   sha256sum $KEY_NAME"
+        print_message "   Çıktı: $KEY_CHECKSUM olmalı" "$GREEN"
         
-        # Display private key with clear formatting
-        print_message "\n┌──────────────────────────────────────────────────────┐" "$PURPLE"
-        print_message "│                  PRIVATE KEY İÇERİĞİ                 │" "$PURPLE"
-        print_message "└──────────────────────────────────────────────────────┘" "$PURPLE"
-        print_message "⚠️  AŞAĞIDAKİ TÜM SATIRLARI KOPYALAYIN VE KAYDEDİN ⚠️" "$RED"
-        echo ""
-        cat "$KEY_PATH"
-        echo ""
-        print_message "⚠️  YUKARIDAKİ TÜM SATIRLARI KOPYALAYIN VE KAYDEDİN ⚠️" "$RED"
-        
-        AUTH_METHOD="SSH Anahtarı"
-        ;;
-    *)
-        print_message "Geçersiz seçim! SSH Anahtarı yöntemi kullanılacak." "$RED"
-        # Default to key auth
-        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
         AUTH_METHOD="SSH Anahtarı"
         ;;
 esac
