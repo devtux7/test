@@ -31,6 +31,33 @@ check_internet() {
     return 0
 }
 
+# Function to set password with visible input
+set_password() {
+    local user="$1"
+    local prompt="$2"
+    
+    while true; do
+        echo ""
+        print_message "$prompt" "$BLUE"
+        print_message "Parola görünür olacak şekilde yazın:" "$YELLOW"
+        read -r PASSWORD
+        print_message "Parolayı tekrar girin:" "$YELLOW"
+        read -r PASSWORD2
+        
+        if [ "$PASSWORD" == "$PASSWORD2" ] && [ -n "$PASSWORD" ]; then
+            echo "$user:$PASSWORD" | sudo chpasswd
+            if [ $? -eq 0 ]; then
+                print_message "✅ Parola başarıyla ayarlandı" "$GREEN"
+                return 0
+            else
+                print_message "❌ Parola ayarlanamadı, tekrar deneyin" "$RED"
+            fi
+        else
+            print_message "❌ Parolalar eşleşmiyor veya boş! Tekrar deneyin." "$RED"
+        fi
+    done
+}
+
 # Display header
 print_message "\n🎯 ============================================" "$PURPLE"
 print_message "     Ubuntu Server SSH Kurulum Scripti" "$PURPLE"
@@ -76,8 +103,7 @@ fi
 print_message "\n🔐 ROOT PAROLA DEĞİŞİKLİĞİ" "$CYAN"
 print_message "──────────────────────────" "$BLUE"
 print_message "⚠️  Root parolasını değiştirmeniz ZORUNLUDUR!" "$RED"
-sudo passwd root
-print_message "✅ Root parolası değiştirildi" "$GREEN"
+set_password "root" "🔑 Yeni ROOT parolasını girin:"
 
 # Create new sudo user
 print_message "\n👥 YENİ KULLANICI OLUŞTURMA" "$CYAN"
@@ -96,20 +122,14 @@ while true; do
     break
 done
 
-# Create new user with sudo privileges
-sudo adduser --gecos "" "$NEW_USER"
+# Create new user without password first
+sudo adduser --disabled-password --gecos "" "$NEW_USER" > /dev/null 2>&1
 sudo usermod -aG sudo "$NEW_USER"
-print_message "✅ Kullanıcı '$NEW_USER' oluşturuldu ve sudo grubuna eklendi" "$GREEN"
 
-# Switch to new user for the rest of the setup
-print_message "\n🔄 Yeni kullanıcıya geçiliyor..." "$BLUE"
-sudo -u "$NEW_USER" bash -c "
-    USER_HOME=\$(eval echo ~$NEW_USER)
-    cd \$USER_HOME
-    
-    # Continue with the setup as new user
-    echo '🚀 Kuruluma devam ediliyor...'
-"
+# Set password for new user
+set_password "$NEW_USER" "🔑 Yeni '$NEW_USER' kullanıcısı için parola girin:"
+
+print_message "✅ Kullanıcı '$NEW_USER' oluşturuldu ve sudo grubuna eklendi" "$GREEN"
 
 # Disable root password login
 print_message "\n🔒 ROOT GİRİŞİ KAPATILIYOR" "$CYAN"
@@ -368,7 +388,8 @@ sudo tee -a /etc/ssh/sshd_config > /dev/null << EOF
 # Authentication settings added by setup script
 PasswordAuthentication $PASSWORD_AUTH
 PubkeyAuthentication $PUBKEY_AUTH
-AuthenticationMethods publickey$( [[ $AUTH_CHOICE == "2" || $AUTH_CHOICE == "4" ]] && echo ",keyboard-interactive" )
+ChallengeResponseAuthentication yes
+AuthenticationMethods $(if [[ $PASSWORD_AUTH == "yes" && $PUBKEY_AUTH == "no" ]]; then echo "password"; elif [[ $PASSWORD_AUTH == "no" && $PUBKEY_AUTH == "yes" ]]; then echo "publickey"; elif [[ $PUBKEY_AUTH == "yes" && ($AUTH_CHOICE == "2" || $AUTH_CHOICE == "4") ]]; then echo "publickey,keyboard-interactive"; fi)
 EOF
 
 # Configure UFW firewall
@@ -451,35 +472,18 @@ PRIVATE_KEY
 # Set proper permissions
 chmod 600 "$SERVER_HOSTNAME"
 
-# Create SSH config entry
-mkdir -p ~/.ssh
-cat >> ~/.ssh/config << SSH_CONFIG
-
-# $SERVER_HOSTNAME SSH Configuration
-Host $SERVER_HOSTNAME
-    HostName $IP_ADDRESS
-    User $NEW_USER
-    Port $SSH_PORT
-    IdentityFile ~/linux/$SERVER_HOSTNAME
-    IdentitiesOnly yes
-SSH_CONFIG
-
-# Set SSH config permissions
-chmod 600 ~/.ssh/config
-
 echo ""
 echo "✅ Kurulum tamamlandı!"
 echo ""
 echo "📋 YAPILAN İŞLEMLER:"
 echo "1. Private key ~/linux/$SERVER_HOSTNAME dosyasına kaydedildi"
 echo "2. Dosya izinleri ayarlandı (chmod 600)"
-echo "3. SSH config dosyası güncellendi"
 echo ""
 echo "🔗 BAĞLANTI KOMUTU:"
-echo "   ssh $SERVER_HOSTNAME"
+echo "   ssh -p 2222 -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS"
 echo ""
-echo "📝 NOT: Bağlanmak için ~/linux dizininde olmanıza gerek YOKTUR!"
-echo "       Herhangi bir dizinden 'ssh $SERVER_HOSTNAME' komutunu kullanabilirsiniz."
+echo "💡 İPUCU: Bağlanmak için ~/linux dizininde olmanıza gerek YOKTUR!"
+echo "         Yukarıdaki komutu herhangi bir dizinden çalıştırabilirsiniz."
 EOF
 
     sudo chmod +x "$CLIENT_SCRIPT"
@@ -499,10 +503,10 @@ EOF
     print_message "   chmod 600 $SERVER_HOSTNAME" "$GREEN"
     echo ""
     print_message "✅ Artık bağlanabilirsiniz:" "$GREEN"
-    print_message "   ssh $SERVER_HOSTNAME" "$GREEN"
+    print_message "   ssh -p 2222 -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
     echo ""
-    print_message "💡 İPUCU: Otomatik kurulum için sunucudaki script'i kullanabilirsiniz:" "$BLUE"
-    print_message "   curl -sSL http://$IP_ADDRESS:8000/ssh_setup_client.sh | bash" "$YELLOW"
+    print_message "💡 İPUCU: Eğer genel IP kullanacaksanız:" "$BLUE"
+    print_message "   ssh -p 2222 -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP" "$GREEN"
 fi
 
 # Create summary
@@ -540,8 +544,10 @@ if [[ $AUTH_CHOICE == "1" || $AUTH_CHOICE == "2" ]]; then
         print_message "• veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP" "$GREEN"
     fi
 else
-    print_message "• ssh $SERVER_HOSTNAME (SSH config kullanarak)" "$GREEN"
-    print_message "• veya: ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
+    print_message "• ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
+    if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+        print_message "• veya: ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP" "$GREEN"
+    fi
 fi
 echo ""
 print_message "🛡️  GÜVENLİK NOTLARI:" "$RED"
@@ -550,6 +556,7 @@ print_message "• Yalnızca $NEW_USER kullanıcısı SSH ile bağlanabilir" "$Y
 print_message "• Fail2Ban aktif - 5 başarısız denemede 1 saat ban" "$YELLOW"
 print_message "• Güvenlik duvarı aktif - sadece port $SSH_PORT açık" "$YELLOW"
 print_message "• Otomatik güvenlik güncellemeleri aktif" "$YELLOW"
+print_message "• Parola görünür şekilde ayarlanır, kopyala-yapıştır desteklenir" "$YELLOW"
 echo ""
 print_message "✅ AYARLAR KALICIDIR ve sunucu yeniden başlatıldığında korunur" "$GREEN"
 print_message "\n🎉 KURULUM TAMAMLANDI! Sunucunuza güvenli bir şekilde bağlanabilirsiniz." "$GREEN"
@@ -589,8 +596,10 @@ $(if [[ $AUTH_CHOICE == "1" || $AUTH_CHOICE == "2" ]]; then
         echo "veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP"
     fi
 else
-    echo "ssh $SERVER_HOSTNAME (SSH config kullanarak)"
-    echo "veya: ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS"
+    echo "ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS"
+    if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+        echo "veya: ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP"
+    fi
 fi)
 
 KURULUM TARİHİ: $(date)
