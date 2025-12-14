@@ -20,7 +20,7 @@ readonly NC='\033[0m'
 readonly SSH_BAK_FILE="/etc/ssh/sshd_config.backup.$(date +%Y%m%d_%H%M%S)"
 readonly SSH_CUSTOM_CONF="/etc/ssh/sshd_config.d/99-hardening.conf"
 readonly FAIL2BAN_CONF="/etc/fail2ban/jail.local"
-readonly LOG_FILE="/var/log/ssh-setup-$(date +%Y%m%d_%H%M%S).log"
+readonly LOG_FILE="/tmp/ssh-setup-$(date +%Y%m%d_%H%M%S).log"
 
 # =============================================================================
 # FONKSİYONLAR
