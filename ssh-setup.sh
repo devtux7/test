@@ -263,24 +263,22 @@ case $AUTH_CHOICE in
         print_message "🔧 2FA paketleri kuruluyor..." "$YELLOW"
         sudo apt install -y libpam-google-authenticator
         
-        # Configure PAM for 2FA - ONLY for SSH
-        sudo tee /etc/pam.d/sshd-2fa > /dev/null << 'PAM_EOF'
-# PAM configuration for SSH with 2FA
-# Disable standard password auth for SSH
-auth requisite pam_succeed_if.so uid >= 1000 quiet_success
-# Require Google Authenticator
+        # Configure PAM for 2FA with PASSWORD first
+        sudo tee /etc/pam.d/sshd-password-2fa > /dev/null << 'PAM_EOF'
+# PAM configuration for SSH with Password + 2FA
+# First, authenticate with password via PAM
+@include common-auth
+# Then, require Google Authenticator
 auth required pam_google_authenticator.so
-# Allow access if 2FA succeeds
-auth required pam_permit.so
 PAM_EOF
         
         # Backup original PAM config
         sudo cp /etc/pam.d/sshd /etc/pam.d/sshd.backup
         
-        # Replace PAM config for SSH
-        sudo cp /etc/pam.d/sshd-2fa /etc/pam.d/sshd
+        # Replace PAM config for SSH with password+2fa version
+        sudo cp /etc/pam.d/sshd-password-2fa /etc/pam.d/sshd
         
-        # Configure SSH for 2FA
+        # Configure SSH for password auth + 2FA
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
         sudo sed -i 's/^ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
         sudo sed -i 's/UsePAM.*/UsePAM yes/' /etc/ssh/sshd_config
@@ -290,7 +288,7 @@ PAM_EOF
         print_message "📱 Aşağıdaki QR kodu Google Authenticator uygulamasına taratın:" "$BLUE"
         sudo -u "$NEW_USER" google-authenticator -t -d -f -r 3 -R 30 -w 3 -Q UTF8
         
-        print_message "✅ 2FA yapılandırıldı. Her girişte Google Authenticator kodu gerekecek." "$GREEN"
+        print_message "✅ 2FA yapılandırıldı. Her girişte önce parola, sonra Google Authenticator kodu gerekecek." "$GREEN"
         ;;
     3)
         # SSH Key only
@@ -358,22 +356,18 @@ PAM_EOF
         print_message "🔧 2FA paketleri kuruluyor..." "$YELLOW"
         sudo apt install -y libpam-google-authenticator
         
-        # Configure PAM for 2FA - ONLY for SSH
-        sudo tee /etc/pam.d/sshd-2fa > /dev/null << 'PAM_EOF'
-# PAM configuration for SSH with 2FA
-# Disable standard password auth for SSH
-auth requisite pam_succeed_if.so uid >= 1000 quiet_success
-# Require Google Authenticator
-auth required pam_google_authenticator.so
-# Allow access if 2FA succeeds
-auth required pam_permit.so
+        # Configure PAM for 2FA with KEY first (SSH Key + 2FA)
+        sudo tee /etc/pam.d/sshd-key-2fa > /dev/null << 'PAM_EOF'
+# PAM configuration for SSH with SSH Key + 2FA
+# For SSH Key + 2FA, we only need Google Authenticator after key auth
+auth required pam_google_authenticator.so nullok
 PAM_EOF
         
         # Backup original PAM config
         sudo cp /etc/pam.d/sshd /etc/pam.d/sshd.backup
         
-        # Replace PAM config for SSH
-        sudo cp /etc/pam.d/sshd-2fa /etc/pam.d/sshd
+        # Replace PAM config for SSH with key+2fa version
+        sudo cp /etc/pam.d/sshd-key-2fa /etc/pam.d/sshd
         
         # Configure SSH for key auth and 2FA
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
@@ -419,7 +413,7 @@ case $AUTH_CHOICE in
         ;;
     2)
         # Password + 2FA
-        AUTH_METHODS="password,keyboard-interactive"
+        AUTH_METHODS="keyboard-interactive"
         ;;
     3)
         # SSH Key only
@@ -553,7 +547,7 @@ EOF
     echo ""
 fi
 
-# Create summary
+# Create summary - FIXED PATH for new user
 print_message "\n🎯 KURULUM ÖZETİ" "$PURPLE"
 print_message "════════════════════════════════════════════════════════════════════════════════" "$PURPLE"
 echo ""
@@ -592,20 +586,25 @@ elif [[ $AUTH_CHOICE == "2" ]]; then
     if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
         print_message "• veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP" "$GREEN"
     fi
-    print_message "📱 Her girişte Google Authenticator kodu gerekecek" "$YELLOW"
+    print_message "📱 Her girişte önce parola, sonra Google Authenticator kodu gerekecek" "$YELLOW"
 else
     print_message "• ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
     if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
         print_message "• veya: ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP" "$GREEN"
     fi
     if [[ $AUTH_CHOICE == "4" ]]; then
-        print_message "📱 Her girişte Google Authenticator kodu gerekecek (SSH key'den sonra)" "$YELLOW"
+        print_message "📱 Her girişte SSH key'den sonra Google Authenticator kodu gerekecek" "$YELLOW"
     fi
 fi
 echo ""
 print_message "🔧 2FA NOTLARI:" "$PURPLE"
-if [[ $AUTH_CHOICE == "2" || $AUTH_CHOICE == "4" ]]; then
-    print_message "• SSH + 2FA her bağlantıda 2FA kodu ister" "$YELLOW"
+if [[ $AUTH_CHOICE == "2" ]]; then
+    print_message "• Parola + 2FA: Önce parola, sonra 2FA kodu gireceksiniz" "$YELLOW"
+    print_message "• QR kodu Google Authenticator uygulamasına taratıldı" "$YELLOW"
+    print_message "• 2FA kodları 30 saniyede bir değişir" "$YELLOW"
+    print_message "• Yedek kurtarma kodlarını güvenli bir yerde saklayın" "$YELLOW"
+elif [[ $AUTH_CHOICE == "4" ]]; then
+    print_message "• SSH Key + 2FA: SSH key doğrulandıktan sonra 2FA kodu gireceksiniz" "$YELLOW"
     print_message "• QR kodu Google Authenticator uygulamasına taratıldı" "$YELLOW"
     print_message "• 2FA kodları 30 saniyede bir değişir" "$YELLOW"
     print_message "• Yedek kurtarma kodlarını güvenli bir yerde saklayın" "$YELLOW"
@@ -623,7 +622,7 @@ print_message "✅ AYARLAR KALICIDIR ve sunucu yeniden başlatıldığında koru
 print_message "\n🎉 KURULUM TAMAMLANDI! Sunucunuza güvenli bir şekilde bağlanabilirsiniz." "$GREEN"
 print_message "════════════════════════════════════════════════════════════════════════════════" "$PURPLE"
 
-# Save summary to file
+# Save summary to file - FIXED: Save to new user's home directory
 SUMMARY_FILE="/home/$NEW_USER/ssh_kurulum_ozeti.txt"
 sudo tee "$SUMMARY_FILE" > /dev/null << EOF
 SSH KURULUM ÖZETİ - $(date)
@@ -651,22 +650,34 @@ echo ""
 fi)
 
 BAĞLANTI KOMUTLARI:
-$(if [[ $AUTH_CHOICE == "1" || $AUTH_CHOICE == "2" ]]; then
+$(if [[ $AUTH_CHOICE == "1" ]]; then
     echo "ssh -p $SSH_PORT $NEW_USER@$IP_ADDRESS"
     if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
         echo "veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP"
     fi
+elif [[ $AUTH_CHOICE == "2" ]]; then
+    echo "ssh -p $SSH_PORT $NEW_USER@$IP_ADDRESS"
+    if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+        echo "veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP"
+    fi
+    echo ""
+    echo "2FA NOTLARI:"
+    echo "- Önce parola, sonra Google Authenticator kodu gireceksiniz"
 else
     echo "ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS"
     if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
         echo "veya: ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP"
     fi
+    if [[ $AUTH_CHOICE == "4" ]]; then
+        echo ""
+        echo "2FA NOTLARI:"
+        echo "- SSH key doğrulandıktan sonra Google Authenticator kodu gireceksiniz"
+    fi
 fi)
 
 $(if [[ $AUTH_CHOICE == "2" || $AUTH_CHOICE == "4" ]]; then
 echo ""
-echo "2FA NOTLARI:"
-echo "• SSH + 2FA her bağlantıda Google Authenticator kodu ister"
+echo "2FA EK BİLGİLERİ:"
 echo "• QR kodu Google Authenticator uygulamasına taratıldı"
 echo "• 2FA kodları 30 saniyede bir değişir"
 echo "• Yedek kurtarma kodlarını güvenli bir yerde saklayın"
@@ -675,4 +686,36 @@ fi)
 KURULUM TARİHİ: $(date)
 EOF
 
-print_message "\n📄 Detaylı özet dosyası: $SUMMARY_FILE" "$BLUE"
+# Fix permissions for summary file
+sudo chown "$NEW_USER:$NEW_USER" "$SUMMARY_FILE"
+sudo chmod 644 "$SUMMARY_FILE"
+
+print_message "\n📄 Detaylı özet dosyası: /home/$NEW_USER/ssh_kurulum_ozeti.txt" "$BLUE"
+print_message "✅ Özet dosyası yeni kullanıcının ev dizininde oluşturuldu" "$GREEN"
+
+# Final verification
+print_message "\n🔍 SON KONTROLLER" "$CYAN"
+print_message "─────────────────" "$BLUE"
+
+# Verify user exists
+if id "$NEW_USER" &>/dev/null; then
+    print_message "✅ Kullanıcı '$NEW_USER' mevcut" "$GREEN"
+else
+    print_message "❌ Kullanıcı '$NEW_USER' oluşturulamadı!" "$RED"
+fi
+
+# Verify SSH service
+if systemctl is-active --quiet ssh; then
+    print_message "✅ SSH servisi çalışıyor" "$GREEN"
+else
+    print_message "❌ SSH servisi çalışmıyor!" "$RED"
+fi
+
+# Verify UFW
+if sudo ufw status | grep -q "Status: active"; then
+    print_message "✅ Güvenlik duvarı aktif" "$GREEN"
+else
+    print_message "❌ Güvenlik duvarı aktif değil!" "$RED"
+fi
+
+print_message "\n🎊 TÜM KURULUM İŞLEMLERİ BAŞARIYLA TAMAMLANDI!" "$PURPLE"
