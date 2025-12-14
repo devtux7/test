@@ -33,7 +33,7 @@ print_message() {
 
 # Log fonksiyonu
 log_message() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE" > /dev/null
 }
 
 # Hata fonksiyonu
@@ -371,16 +371,16 @@ EOF
             ;;
     esac
     
-    # SSH config testi
-    print_message "🔍 SSH config test ediliyor..." "$YELLOW"
-
-    # /run/sshd dizinini oluştur
+    # SSH servisi için gerekli dizinleri oluştur
+    print_message "\n🔧 SSH servisi için gerekli dizinler oluşturuluyor..." "$YELLOW"
     sudo mkdir -p /run/sshd
     sudo chmod 0755 /run/sshd
-
+    
     # SSH host key'lerini oluştur (eğer yoksa)
     sudo ssh-keygen -A >/dev/null 2>&1 || true
-
+    
+    # SSH config testi
+    print_message "🔍 SSH config test ediliyor..." "$YELLOW"
     if sudo sshd -t; then
         print_message "✅ SSH config testi başarılı" "$GREEN"
     else
@@ -395,24 +395,58 @@ configure_2fa() {
         print_message "\n📱 2FA KONFİGÜRASYONU" "$CYAN"
         print_message "─────────────────────" "$BLUE"
         
-        sudo apt install -y libpam-google-authenticator >> "$LOG_FILE" 2>&1
+        sudo apt install -y libpam-google-authenticator qrencode >> "$LOG_FILE" 2>&1
         
         # PAM config - mevcut dosyaya satır ekle (üzerine yazma)
         if ! grep -q "pam_google_authenticator.so" /etc/pam.d/sshd; then
             echo "auth required pam_google_authenticator.so" | sudo tee -a /etc/pam.d/sshd > /dev/null
+            print_message "✅ PAM yapılandırıldı" "$GREEN"
         fi
         
-        print_message "\n🔑 2FA kurulumu için:" "$YELLOW"
-        print_message "1. Şu komutu çalıştırın: sudo -u $NEW_USER google-authenticator" "$GREEN"
-        print_message "2. QR kodu Google Authenticator uygulamasına taratın" "$GREEN"
-        print_message "3. Kurtarma kodlarını güvenli bir yerde saklayın" "$GREEN"
-        print_message "4. Tüm sorulara 'y' cevabını verin" "$GREEN"
+        # Kullanıcı için 2FA yapılandırmasını otomatik oluştur
+        print_message "🔑 2FA kurulumu yapılıyor..." "$YELLOW"
         
-        read -p "2FA kurulumunu tamamladınız mı? (y/N): " fa_confirm
-        if [[ "$fa_confirm" =~ ^[Yy]$ ]]; then
-            print_message "✅ 2FA yapılandırıldı" "$GREEN"
+        # Google Authenticator yapılandırmasını otomatik oluştur
+        sudo -u "$NEW_USER" bash -c "
+            google-authenticator -t -d -f -r 3 -R 30 -w 3 -Q UTF8 << 'EOF'
+y
+y
+y
+y
+EOF
+        " >> "$LOG_FILE" 2>&1
+        
+        # Kullanıcının Google Authenticator secret'ını al ve göster
+        GA_SECRET_FILE="/home/$NEW_USER/.google_authenticator"
+        if [[ -f "$GA_SECRET_FILE" ]]; then
+            GA_SECRET=$(sudo head -1 "$GA_SECRET_FILE")
+            
+            print_message "\n🔐 2FA BİLGİLERİ:" "$CYAN"
+            print_message "────────────────" "$BLUE"
+            print_message "• Secret Key: $GA_SECRET" "$YELLOW"
+            print_message "• Bu key'i Google Authenticator uygulamasına manuel ekleyebilirsiniz" "$GREEN"
+            print_message "• Her girişte 6 haneli Google Authenticator kodu gerekecek" "$GREEN"
+            
+            # QR kodu oluştur (qrencode kuruluysa)
+            if command -v qrencode &> /dev/null; then
+                print_message "\n📱 QR KODU (Google Authenticator ile taratın):" "$BLUE"
+                # TOTP URI oluştur
+                TOTP_URI="otpauth://totp/$NEW_USER@$SERVER_HOSTNAME?secret=$GA_SECRET&issuer=SSH-Server"
+                echo "$TOTP_URI" | qrencode -t UTF8
+                print_message "• Veya yukarıdaki QR kodu taratabilirsiniz" "$GREEN"
+            fi
+            
+            # Kurtarma kodlarını göster
+            print_message "\n🔑 KURTARMA KODLARI (güvenli bir yere kaydedin!):" "$RED"
+            sudo tail -n +2 "$GA_SECRET_FILE" | head -5 | while read code; do
+                print_message "   $code" "$YELLOW"
+            done
+            
+            print_message "\n✅ 2FA yapılandırıldı" "$GREEN"
+            log_message "2FA yapılandırıldı, secret: ${GA_SECRET:0:10}..."
         else
-            print_message "⚠️  2FA kurulumu tamamlanmadı!" "$YELLOW"
+            print_message "⚠️  2FA dosyası oluşturulamadı!" "$RED"
+            print_message "ℹ️  Manuel olarak şu komutu çalıştırın: sudo -u $NEW_USER google-authenticator" "$YELLOW"
         fi
     fi
 }
@@ -423,18 +457,32 @@ manage_ssh_keys() {
         print_message "\n🔑 SSH ANAHTAR YÖNETİMİ" "$CYAN"
         print_message "───────────────────────" "$BLUE"
         
+        # SERVER_HOSTNAME tanımlı değilse, hostname'i al
+        if [[ -z "${SERVER_HOSTNAME:-}" ]]; then
+            SERVER_HOSTNAME=$(hostname | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+            if [ -z "$SERVER_HOSTNAME" ]; then
+                SERVER_HOSTNAME="server"
+            fi
+        fi
+        
+        KEY_NAME="$SERVER_HOSTNAME"
+        
         print_message "\n📋 İSTEMCİ TARAFINDA YAPILACAKLAR:" "$YELLOW"
         print_message "──────────────────────────────────" "$BLUE"
         echo ""
         print_message "1. İstemci bilgisayarınızda terminal açın" "$GREEN"
         print_message "2. SSH anahtar çifti oluşturun:" "$GREEN"
-        print_message "   ssh-keygen -t ed25519 -f ~/.ssh/$SERVER_HOSTNAME" "$CYAN"
-        print_message "3. Public key içeriğini görüntüleyin:" "$GREEN"
-        print_message "   cat ~/.ssh/$SERVER_HOSTNAME.pub" "$CYAN"
-        print_message "4. Public key içeriğini kopyalayın" "$GREEN"
+        print_message "   ssh-keygen -t ed25519 -f ~/.ssh/$KEY_NAME" "$CYAN"
+        print_message "   (Parola kısmını boş bırakabilirsiniz - Enter'a basın)" "$YELLOW"
+        print_message "3. Dosya izinlerini ayarlayın:" "$GREEN"
+        print_message "   chmod 600 ~/.ssh/$KEY_NAME" "$CYAN"
+        print_message "4. Public key içeriğini görüntüleyin:" "$GREEN"
+        print_message "   cat ~/.ssh/$KEY_NAME.pub" "$CYAN"
+        print_message "5. Aşağıdaki satıra public key içeriğini kopyalayıp yapıştırın" "$GREEN"
         echo ""
         print_message "📋 PUBLIC KEY İÇERİĞİNİ AŞAĞIYA YAPIŞTIRIN:" "$YELLOW"
-        print_message "(Ctrl+D ile bitirin)" "$BLUE"
+        print_message "(Tüm satırı kopyalayıp yapıştırın, Ctrl+D ile bitirin)" "$BLUE"
+        print_message "Örnek: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." "$YELLOW"
         echo ""
         
         # Public key'i oku
@@ -451,10 +499,20 @@ manage_ssh_keys() {
             sudo chmod 700 "/home/$NEW_USER/.ssh"
             sudo chmod 600 "/home/$NEW_USER/.ssh/authorized_keys"
             
-            print_message "✅ Public key başarıyla eklendi" "$GREEN"
-            log_message "Public key eklendi"
+            print_message "\n✅ Public key başarıyla eklendi" "$GREEN"
+            print_message "• Key: ~/.ssh/authorized_keys dosyasına kaydedildi" "$CYAN"
+            
+            # Bağlantı komutunu göster
+            IP_ADDRESS=$(hostname -I | awk '{print $1}')
+            print_message "\n🔗 BAĞLANTI KOMUTU:" "$CYAN"
+            print_message "ssh -p $SSH_PORT -i ~/.ssh/$KEY_NAME $NEW_USER@$IP_ADDRESS" "$GREEN"
+            
+            log_message "Public key eklendi: ${PUBLIC_KEY:0:50}..."
         else
-            print_message "⚠️  Public key girilmedi. SSH anahtar doğrulama kullanılamayacak." "$YELLOW"
+            print_message "⚠️  Public key girilmedi!" "$YELLOW"
+            print_message "ℹ️  SSH anahtar doğrulama kullanılamayacak." "$BLUE"
+            print_message "ℹ️  Daha sonra public key'i şuraya ekleyebilirsiniz:" "$BLUE"
+            print_message "    sudo nano /home/$NEW_USER/.ssh/authorized_keys" "$GREEN"
         fi
     fi
 }
@@ -553,7 +611,11 @@ show_summary() {
         PUBLIC_IP="Bilinmiyor"
     fi
     
-    SERVER_HOSTNAME=$(hostname)
+    SERVER_HOSTNAME=$(hostname | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+    if [ -z "$SERVER_HOSTNAME" ]; then
+        SERVER_HOSTNAME="server"
+    fi
+    
     IP_ADDRESS=$(hostname -I | awk '{print $1}')
     
     echo ""
@@ -641,7 +703,7 @@ echo ""
 elif [[ "$AUTH_CHOICE" == "1" || "$AUTH_CHOICE" == "2" ]]; then
 echo "PAROLA BAĞLANTISI:"
 echo "ssh -p $SSH_PORT $NEW_USER@$IP_ADDRESS"
-if [[ "$PUBLIC_IP" != "Bilinmiyor" ]]; then
+if [[ "$PUBLIC_IP" != "Bilinmiyor" ]; then
 echo "veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP"
 fi
 echo ""
@@ -672,6 +734,11 @@ main() {
     print_message "     Ubuntu Server SSH Kurulum Scripti" "$PURPLE"
     print_message "     Geliştirilmiş ve Güvenli Versiyon" "$PURPLE"
     print_message "============================================\n" "$PURPLE"
+    
+    # Log dosyasını başlat
+    touch "$LOG_FILE"
+    chmod 600 "$LOG_FILE"
+    log_message "Script başlatıldı"
     
     # Başlangıç kontrolleri
     check_root
@@ -721,18 +788,14 @@ main() {
     
     print_message "\n🎉 KURULUM TAMAMLANDI!" "$GREEN"
     print_message "════════════════════════════════════════════════════════════════════════════════" "$PURPLE"
+    
+    # Log dosyasını kapat
+    log_message "Kurulum tamamlandı"
 }
 
 # =============================================================================
 # ANA PROGRAM
 # =============================================================================
 
-# Log dosyasını başlat
-touch "$LOG_FILE"
-chmod 600 "$LOG_FILE"
-
 # Ana fonksiyonu çalıştır
 main "$@"
-
-# Log dosyasını kapat
-log_message "Kurulum tamamlandı"
