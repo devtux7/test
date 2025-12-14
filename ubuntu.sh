@@ -1,181 +1,181 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# ======================
-# == GLOBAL SETTINGS ==
-# ======================
+# ==================================================
+# Ubuntu & Debian Interactive SSH Hardening Script
+# Workflow: USER-FIRST, INTERACTIVE, SUDO-AWARE
+# ==================================================
 
+# ======================
+# == COLORS / UI      ==
+# ======================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-SSH_CONFIG_DIR="/etc/ssh/sshd_config.d"
-SSH_HARDENING_FILE="$SSH_CONFIG_DIR/99-hardening.conf"
-SSH_PORT_DEFAULT=2222
-SSH_GROUP="sshusers"
+print()   { echo -e "${BLUE}▶${NC} $1"; }
+success() { echo -e "${GREEN}✔${NC} $1"; }
+warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
+error()   { echo -e "${RED}✖${NC} $1"; }
 
-trap 'echo -e "${RED}❌ Hata oluştu. Script durduruldu.${NC}"' ERR
-
-# ======================
-# == FUNCTIONS        ==
-# ======================
-
-print() {
-  echo -e "${BLUE}▶${NC} $1"
-}
-
-success() {
-  echo -e "${GREEN}✔${NC} $1"
-}
-
-warn() {
-  echo -e "${YELLOW}⚠${NC} $1"
-}
+trap 'error "Beklenmeyen bir hata oluştu. Script durduruldu."' ERR
 
 # ======================
-# == PRIVILEGE CHECK ==
+# == PRIVILEGE MODEL ==
 # ======================
 
 if [[ "$EUID" -ne 0 ]]; then
-  warn "Script root olarak çalışmıyor. Root yetkileri gerektiren adımlar için sudo kullanılacak."
+  warn "Script root olarak çalışmıyor. Gerekli adımlar sudo ile yürütülecek."
   SUDO="sudo"
 else
   SUDO=""
 fi
 
-check_os
-check_internet() {
-  print "İnternet bağlantısı kontrol ediliyor"
-  if ! curl -s --head https://deb.debian.org >/dev/null; then
-    echo -e "${RED}İnternet erişimi yok.${NC}"
-    exit 1
-  fi
-  success "İnternet bağlantısı OK"
-}
-
-ask() {
-  read -rp "$1" REPLY
-}
-
-ask_yes_no() {
-  while true; do
-    read -rp "$1 (y/n): " yn
-    case $yn in
-      [Yy]*) return 0;;
-      [Nn]*) return 1;;
-    esac
-  done
-}
-
 # ======================
 # == PRECHECKS       ==
 # ======================
 
-require_root
-check_os
-check_internet
+command -v apt >/dev/null || { error "Sadece Ubuntu / Debian desteklenir"; exit 1; }
+
+print "İnternet bağlantısı kontrol ediliyor"
+$SUDO curl -fsSL https://deb.debian.org >/dev/null || { error "İnternet yok"; exit 1; }
+success "İnternet bağlantısı OK"
 
 # ======================
-# == USER SETUP      ==
+# == CURRENT STATUS ==
 # ======================
 
-print "Yeni kullanıcı oluşturma"
-read -rp "Kullanıcı adı: " USERNAME
+print "Mevcut sistem bilgileri"
+echo "OS: $(. /etc/os-release && echo "$PRETTY_NAME")"
+echo "Hostname: $(hostname)"
+echo "Mevcut kullanıcı: $(whoami)"
 
-if id "$USERNAME" &>/dev/null; then
-  success "Kullanıcı zaten mevcut"
+# ======================
+# == INSTALL MODE   ==
+# ======================
+
+print "Kurulum modu seçin"
+cat <<EOF
+1) Yeni sudo kullanıcısı + SSH key (ÖNERİLEN)
+2) Mevcut kullanıcıyı SSH için yapılandır
+3) Yeni kullanıcı + Parola tabanlı SSH (geçici)
+4) Sadece SSH hardening (kullanıcı yok)
+EOF
+
+read -rp "Seçiminiz [1-4]: " INSTALL_MODE
+
+# ======================
+# == USER WORKFLOW  ==
+# ======================
+
+CREATE_USER=false
+USE_KEYS=false
+ALLOW_PASSWORD=false
+
+case "$INSTALL_MODE" in
+  1) CREATE_USER=true; USE_KEYS=true;;
+  2) CREATE_USER=false; USE_KEYS=true;;
+  3) CREATE_USER=true; ALLOW_PASSWORD=true;;
+  4) ;; 
+  *) error "Geçersiz seçim"; exit 1;;
+esac
+
+if $CREATE_USER; then
+  read -rp "Oluşturulacak kullanıcı adı: " USERNAME
+  if id "$USERNAME" &>/dev/null; then
+    warn "Kullanıcı zaten mevcut"
+  else
+    $SUDO adduser "$USERNAME"
+  fi
 else
-  adduser "$USERNAME"
+  USERNAME="$(whoami)"
 fi
 
-print "SSH kullanıcı grubu kontrol ediliyor"
-getent group "$SSH_GROUP" >/dev/null || groupadd "$SSH_GROUP"
-usermod -aG sudo,"SSH_GROUP" "$USERNAME"
+$SUDO usermod -aG sudo "$USERNAME"
 
 # ======================
-# == ROOT PASSWORD   ==
+# == SSH KEY SETUP  ==
 # ======================
 
-if ask_yes_no "Root parolasını değiştirmek ister misiniz? (önerilir)"; then
-  passwd root
+if $USE_KEYS; then
+  print "SSH Public Key kurulumu"
+  echo "Client tarafında çalıştırın: ssh-keygen -t ed25519"
+  read -rp "Public key (.pub içeriği): " PUBKEY
+
+  SSH_DIR="/home/$USERNAME/.ssh"
+  $SUDO mkdir -p "$SSH_DIR"
+  echo "$PUBKEY" | $SUDO tee "$SSH_DIR/authorized_keys" >/dev/null
+
+  $SUDO chmod 700 "$SSH_DIR"
+  $SUDO chmod 600 "$SSH_DIR/authorized_keys"
+  $SUDO chown -R "$USERNAME:$USERNAME" "$SSH_DIR"
+
+  success "SSH key eklendi"
 fi
 
 # ======================
-# == SSH KEY SETUP   ==
+# == ROOT PASSWORD ==
 # ======================
 
-print "Public SSH key girilmesi"
-echo "Lütfen istemci tarafında şu komutu çalıştırın:" 
-echo "  ssh-keygen -t ed25519"
-echo "Sonra .pub dosyasının içeriğini aşağıya yapıştırın:"
-
-auth_dir="/home/$USERNAME/.ssh"
-mkdir -p "$auth_dir"
-chmod 700 "$auth_dir"
-
-read -rp "SSH Public Key: " PUBKEY
-echo "$PUBKEY" > "$auth_dir/authorized_keys"
-chmod 600 "$auth_dir/authorized_keys"
-chown -R "$USERNAME:$USERNAME" "$auth_dir"
-
-success "SSH key eklendi"
+read -rp "Root parolasını değiştirmek ister misiniz? (önerilir) [y/n]: " CHANGE_ROOT
+[[ "$CHANGE_ROOT" =~ ^[Yy]$ ]] && $SUDO passwd root
 
 # ======================
-# == SSH HARDENING   ==
+# == SSH CONFIG     ==
 # ======================
 
-print "SSH port ayarı"
-read -rp "SSH port (1024-65535) [default: $SSH_PORT_DEFAULT]: " SSH_PORT
-SSH_PORT=${SSH_PORT:-$SSH_PORT_DEFAULT}
+read -rp "SSH port (1024-65535) [2222]: " SSH_PORT
+SSH_PORT=${SSH_PORT:-2222}
 
-mkdir -p "$SSH_CONFIG_DIR"
+$SUDO mkdir -p /etc/ssh/sshd_config.d
 
-cat > "$SSH_HARDENING_FILE" <<EOF
+$SUDO tee /etc/ssh/sshd_config.d/99-hardening.conf >/dev/null <<EOF
 Port $SSH_PORT
 PermitRootLogin no
-PasswordAuthentication no
 PubkeyAuthentication yes
-AllowGroups $SSH_GROUP
+PasswordAuthentication $( $ALLOW_PASSWORD && echo yes || echo no )
+AllowUsers $USERNAME
 X11Forwarding no
 MaxAuthTries 3
 EOF
 
-sshd -t
-systemctl restart ssh
-success "SSH hardening tamamlandı"
+print "SSH config test ediliyor"
+$SUDO sshd -t
+$SUDO systemctl restart ssh
+success "SSH yeniden başlatıldı"
 
 # ======================
-# == 2FA (OPTIONAL)  ==
+# == OPTIONAL 2FA   ==
 # ======================
 
-if ask_yes_no "Google Authenticator (2FA) kurulsun mu?"; then
-  apt install -y libpam-google-authenticator
-  echo "auth required pam_google_authenticator.so nullok" >> /etc/pam.d/sshd
-  sed -i 's/^ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
-  systemctl restart ssh
-  warn "2FA aktif. Kullanıcılar google-authenticator çalıştırmalı"
+read -rp "2FA (Google Authenticator) kurulsun mu? [y/n]: " ENABLE_2FA
+if [[ "$ENABLE_2FA" =~ ^[Yy]$ ]]; then
+  $SUDO apt install -y libpam-google-authenticator
+  grep -q pam_google_authenticator /etc/pam.d/sshd || \
+    echo "auth required pam_google_authenticator.so nullok" | $SUDO tee -a /etc/pam.d/sshd
+  $SUDO sed -i 's/^#\?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
+  $SUDO systemctl restart ssh
+  warn "Kullanıcı: google-authenticator çalıştırmalı"
 fi
 
 # ======================
 # == FIREWALL       ==
 # ======================
 
-print "UFW yapılandırılıyor"
-apt install -y ufw
-ufw allow "$SSH_PORT"/tcp
-ufw --force enable
-success "Firewall aktif"
+$SUDO apt install -y ufw
+$SUDO ufw allow "$SSH_PORT"/tcp
+$SUDO ufw --force enable
+success "UFW aktif"
 
 # ======================
 # == FAIL2BAN       ==
 # ======================
 
-print "Fail2Ban kuruluyor"
-apt install -y fail2ban
+$SUDO apt install -y fail2ban
 
-cat > /etc/fail2ban/jail.d/sshd.local <<EOF
+$SUDO tee /etc/fail2ban/jail.d/sshd.local >/dev/null <<EOF
 [sshd]
 enabled = true
 port = $SSH_PORT
@@ -185,15 +185,15 @@ bantime.increment = true
 maxretry = 3
 EOF
 
-systemctl restart fail2ban
+$SUDO systemctl restart fail2ban
 success "Fail2Ban aktif"
 
 # ======================
 # == SUMMARY        ==
 # ======================
 
-echo -e "\n${GREEN}Kurulum tamamlandı!${NC}"
+echo -e "\n${GREEN}Kurulum tamamlandı${NC}"
 echo "Kullanıcı: $USERNAME"
 echo "SSH Port: $SSH_PORT"
-echo "Root SSH: Kapalı"
-echo "Password Auth: Kapalı"
+echo "SSH Key: $USE_KEYS"
+echo "Parola SSH: $ALLOW_PASSWORD"
