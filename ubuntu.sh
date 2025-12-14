@@ -34,20 +34,18 @@ warn() {
   echo -e "${YELLOW}⚠${NC} $1"
 }
 
-require_root() {
-  if [[ "$EUID" -ne 0 ]]; then
-    echo -e "${RED}Bu script root olarak çalıştırılmalıdır.${NC}"
-    exit 1
-  fi
-}
+# ======================
+# == PRIVILEGE CHECK ==
+# ======================
 
-check_os() {
-  if ! command -v apt >/dev/null; then
-    echo -e "${RED}Sadece Ubuntu/Debian desteklenmektedir.${NC}"
-    exit 1
-  fi
-}
+if [[ "$EUID" -ne 0 ]]; then
+  warn "Script root olarak çalışmıyor. Root yetkileri gerektiren adımlar için sudo kullanılacak."
+  SUDO="sudo"
+else
+  SUDO=""
+fi
 
+check_os
 check_internet() {
   print "İnternet bağlantısı kontrol ediliyor"
   if ! curl -s --head https://deb.debian.org >/dev/null; then
