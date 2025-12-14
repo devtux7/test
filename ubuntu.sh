@@ -4,7 +4,7 @@
 # GÜVENLİK AYARLARI VE HATA YAKALAMA
 # =============================================================================
 set -Eeuo pipefail
-trap 'echo -e "\033[0;31m❌ Hata oluştu. Script durduruldu.\033[0m"' ERR
+trap 'echo -e "\033[0;31m❌ Beklenmedik hata oluştu. Script durduruldu.\033[0m"' ERR
 trap 'echo -e "\033[0;31m\n❌ Kullanıcı tarafından iptal edildi.\033[0m"' INT
 
 # =============================================================================
@@ -46,7 +46,8 @@ error_exit() {
 # Kontrol fonksiyonu
 check_command() {
     if ! command -v "$1" &> /dev/null; then
-        error_exit "$1 komutu bulunamadı. Lütfen kurun: sudo apt install $1"
+        print_message "⚠️  $1 komutu bulunamadı. Kuruluyor..." "$YELLOW"
+        sudo apt install -y "$1" >> "$LOG_FILE" 2>&1 || print_message "❌ $1 kurulumu başarısız" "$RED"
     fi
 }
 
@@ -377,15 +378,29 @@ EOF
     sudo chmod 0755 /run/sshd
     
     # SSH host key'lerini oluştur (eğer yoksa)
-    sudo ssh-keygen -A >/dev/null 2>&1 || true
+    if [[ ! -f /etc/ssh/ssh_host_ed25519_key ]]; then
+        sudo ssh-keygen -A >/dev/null 2>&1 || true
+    fi
     
     # SSH config testi
     print_message "🔍 SSH config test ediliyor..." "$YELLOW"
-    if sudo sshd -t; then
+    if sudo sshd -t 2>&1; then
         print_message "✅ SSH config testi başarılı" "$GREEN"
     else
-        print_message "⚠️  SSH config testinde uyarı, ancak devam ediliyor..." "$YELLOW"
-        print_message "ℹ️  SSH servisi başlatıldığında otomatik düzeltilecektir" "$BLUE"
+        print_message "⚠️  SSH config testinde uyarı, düzeltiliyor..." "$YELLOW"
+        # Hata mesajını göster
+        sudo sshd -t 2>&1 | grep -v "Warning" || true
+        
+        # Hata durumunda manuel düzeltme yap
+        sudo sed -i '/^Include/d' /etc/ssh/sshd_config
+        echo "Include /etc/ssh/sshd_config.d/*.conf" | sudo tee -a /etc/ssh/sshd_config > /dev/null
+        
+        # Tekrar test et
+        if sudo sshd -t 2>&1; then
+            print_message "✅ SSH config düzeltildi ve test edildi" "$GREEN"
+        else
+            print_message "⚠️  SSH config testinde hata, ancak devam ediliyor..." "$RED"
+        fi
     fi
 }
 
@@ -395,7 +410,15 @@ configure_2fa() {
         print_message "\n📱 2FA KONFİGÜRASYONU" "$CYAN"
         print_message "─────────────────────" "$BLUE"
         
-        sudo apt install -y libpam-google-authenticator qrencode >> "$LOG_FILE" 2>&1
+        # 2FA paketlerini kur
+        print_message "📦 2FA paketleri kuruluyor..." "$YELLOW"
+        sudo apt install -y libpam-google-authenticator >> "$LOG_FILE" 2>&1
+        
+        # qrencode kurmaya çalış (QR kodu için)
+        if ! command -v qrencode &> /dev/null; then
+            print_message "📦 qrencode kuruluyor (QR kodu için)..." "$YELLOW"
+            sudo apt install -y qrencode >> "$LOG_FILE" 2>&1 || print_message "⚠️  qrencode kurulamadı, QR kodu gösterilemeyecek" "$YELLOW"
+        fi
         
         # PAM config - mevcut dosyaya satır ekle (üzerine yazma)
         if ! grep -q "pam_google_authenticator.so" /etc/pam.d/sshd; then
@@ -403,50 +426,68 @@ configure_2fa() {
             print_message "✅ PAM yapılandırıldı" "$GREEN"
         fi
         
-        # Kullanıcı için 2FA yapılandırmasını otomatik oluştur
+        # SERVER_HOSTNAME değişkenini tanımla
+        if [[ -z "${SERVER_HOSTNAME:-}" ]]; then
+            SERVER_HOSTNAME=$(hostname | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+            if [ -z "$SERVER_HOSTNAME" ]; then
+                SERVER_HOSTNAME="server"
+            fi
+        fi
+        
+        # Kullanıcı için 2FA yapılandırmasını oluştur
         print_message "🔑 2FA kurulumu yapılıyor..." "$YELLOW"
         
         # Google Authenticator yapılandırmasını otomatik oluştur
-        sudo -u "$NEW_USER" bash -c "
-            google-authenticator -t -d -f -r 3 -R 30 -w 3 -Q UTF8 << 'EOF'
-y
-y
-y
-y
-EOF
-        " >> "$LOG_FILE" 2>&1
+        # Not: Bu işlem etkileşimli olduğu için beklediğimiz gibi çalışmayabilir
+        # Bunun yerine kullanıcıyı yönlendireceğiz
         
-        # Kullanıcının Google Authenticator secret'ını al ve göster
+        # Önce .google_authenticator dosyasını oluştur
         GA_SECRET_FILE="/home/$NEW_USER/.google_authenticator"
-        if [[ -f "$GA_SECRET_FILE" ]]; then
-            GA_SECRET=$(sudo head -1 "$GA_SECRET_FILE")
+        
+        # Eğer dosya yoksa, kullanıcıya manuel kurulum talimatları ver
+        if [[ ! -f "$GA_SECRET_FILE" ]]; then
+            print_message "\n📋 MANUEL 2FA KURULUM TALİMATLARI:" "$YELLOW"
+            print_message "──────────────────────────────────" "$BLUE"
+            print_message "1. Şu komutu çalıştırın:" "$GREEN"
+            print_message "   sudo -u $NEW_USER google-authenticator" "$CYAN"
+            print_message "2. Tüm sorulara 'y' (yes) cevabını verin:" "$GREEN"
+            print_message "   - Do you want authentication tokens to be time-based (y/n) ? y" "$YELLOW"
+            print_message "   - Do you want me to update your ~/.google_authenticator file (y/n) ? y" "$YELLOW"
+            print_message "   - Do you want to disallow multiple uses of the same authentication token? y" "$YELLOW"
+            print_message "   - By default, tokens are good for 30 seconds. Do you want to do so? y" "$YELLOW"
+            print_message "   - Do you want to enable rate-limiting (y/n) ? y" "$YELLOW"
+            print_message "3. QR kodunu Google Authenticator uygulamasına taratın" "$GREEN"
+            print_message "4. Kurtarma kodlarını güvenli bir yere kaydedin" "$GREEN"
+            
+            read -p "2FA kurulumunu tamamladınız mı? (y/N): " fa_confirm
+            if [[ "$fa_confirm" =~ ^[Yy]$ ]]; then
+                print_message "✅ 2FA yapılandırıldı" "$GREEN"
+            else
+                print_message "⚠️  2FA kurulumu tamamlanmadı!" "$YELLOW"
+                print_message "ℹ️  Daha sonra şu komutla kurabilirsiniz: sudo -u $NEW_USER google-authenticator" "$BLUE"
+            fi
+        else
+            # Dosya varsa, bilgileri göster
+            GA_SECRET=$(sudo head -1 "$GA_SECRET_FILE" 2>/dev/null || echo "Bilinmiyor")
             
             print_message "\n🔐 2FA BİLGİLERİ:" "$CYAN"
             print_message "────────────────" "$BLUE"
-            print_message "• Secret Key: $GA_SECRET" "$YELLOW"
-            print_message "• Bu key'i Google Authenticator uygulamasına manuel ekleyebilirsiniz" "$GREEN"
-            print_message "• Her girişte 6 haneli Google Authenticator kodu gerekecek" "$GREEN"
+            print_message "✅ 2FA zaten yapılandırılmış" "$GREEN"
             
-            # QR kodu oluştur (qrencode kuruluysa)
-            if command -v qrencode &> /dev/null; then
-                print_message "\n📱 QR KODU (Google Authenticator ile taratın):" "$BLUE"
-                # TOTP URI oluştur
-                TOTP_URI="otpauth://totp/$NEW_USER@$SERVER_HOSTNAME?secret=$GA_SECRET&issuer=SSH-Server"
-                echo "$TOTP_URI" | qrencode -t UTF8
-                print_message "• Veya yukarıdaki QR kodu taratabilirsiniz" "$GREEN"
+            if [[ "$GA_SECRET" != "Bilinmiyor" ]]; then
+                print_message "• Secret Key: $GA_SECRET" "$YELLOW"
+                
+                # QR kodu oluştur (qrencode kuruluysa)
+                if command -v qrencode &> /dev/null; then
+                    print_message "\n📱 QR KODU (Google Authenticator ile taratın):" "$BLUE"
+                    # TOTP URI oluştur
+                    TOTP_URI="otpauth://totp/$NEW_USER@$SERVER_HOSTNAME?secret=$GA_SECRET&issuer=SSH-Server"
+                    echo "$TOTP_URI" | qrencode -t UTF8 2>/dev/null || print_message "⚠️  QR kodu oluşturulamadı" "$YELLOW"
+                fi
             fi
             
-            # Kurtarma kodlarını göster
-            print_message "\n🔑 KURTARMA KODLARI (güvenli bir yere kaydedin!):" "$RED"
-            sudo tail -n +2 "$GA_SECRET_FILE" | head -5 | while read code; do
-                print_message "   $code" "$YELLOW"
-            done
-            
             print_message "\n✅ 2FA yapılandırıldı" "$GREEN"
-            log_message "2FA yapılandırıldı, secret: ${GA_SECRET:0:10}..."
-        else
-            print_message "⚠️  2FA dosyası oluşturulamadı!" "$RED"
-            print_message "ℹ️  Manuel olarak şu komutu çalıştırın: sudo -u $NEW_USER google-authenticator" "$YELLOW"
+            log_message "2FA yapılandırıldı"
         fi
     fi
 }
@@ -703,7 +744,7 @@ echo ""
 elif [[ "$AUTH_CHOICE" == "1" || "$AUTH_CHOICE" == "2" ]]; then
 echo "PAROLA BAĞLANTISI:"
 echo "ssh -p $SSH_PORT $NEW_USER@$IP_ADDRESS"
-if [[ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+if [[ "$PUBLIC_IP" != "Bilinmiyor" ]]; then
 echo "veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP"
 fi
 echo ""
@@ -768,8 +809,10 @@ main() {
     # SSH konfigürasyonu
     configure_ssh
     
-    # 2FA konfigürasyonu
+    # 2FA konfigürasyonu (burada daha esnek hata yakalama)
+    set +e
     configure_2fa
+    set -e
     
     # SSH anahtar yönetimi
     manage_ssh_keys
