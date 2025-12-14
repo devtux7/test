@@ -263,11 +263,22 @@ case $AUTH_CHOICE in
         print_message "🔧 2FA paketleri kuruluyor..." "$YELLOW"
         sudo apt install -y libpam-google-authenticator
         
-        # Configure PAM for 2FA
-        sudo tee -a /etc/pam.d/sshd > /dev/null << 'PAM_EOF'
-# Google Authenticator
+        # Configure PAM for 2FA - ONLY for SSH
+        sudo tee /etc/pam.d/sshd-2fa > /dev/null << 'PAM_EOF'
+# PAM configuration for SSH with 2FA
+# Disable standard password auth for SSH
+auth requisite pam_succeed_if.so uid >= 1000 quiet_success
+# Require Google Authenticator
 auth required pam_google_authenticator.so
+# Allow access if 2FA succeeds
+auth required pam_permit.so
 PAM_EOF
+        
+        # Backup original PAM config
+        sudo cp /etc/pam.d/sshd /etc/pam.d/sshd.backup
+        
+        # Replace PAM config for SSH
+        sudo cp /etc/pam.d/sshd-2fa /etc/pam.d/sshd
         
         # Configure SSH for 2FA
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
@@ -275,9 +286,11 @@ PAM_EOF
         sudo sed -i 's/UsePAM.*/UsePAM yes/' /etc/ssh/sshd_config
         
         # Generate 2FA for user
-        sudo -u "$NEW_USER" google-authenticator -t -d -f -r 3 -R 30 -w 3
+        print_message "🔑 2FA kurulumu yapılıyor..." "$YELLOW"
+        print_message "📱 Aşağıdaki QR kodu Google Authenticator uygulamasına taratın:" "$BLUE"
+        sudo -u "$NEW_USER" google-authenticator -t -d -f -r 3 -R 30 -w 3 -Q UTF8
         
-        print_message "✅ 2FA yapılandırıldı. Google Authenticator uygulamasına QR kodu taratın." "$GREEN"
+        print_message "✅ 2FA yapılandırıldı. Her girişte Google Authenticator kodu gerekecek." "$GREEN"
         ;;
     3)
         # SSH Key only
@@ -345,11 +358,22 @@ PAM_EOF
         print_message "🔧 2FA paketleri kuruluyor..." "$YELLOW"
         sudo apt install -y libpam-google-authenticator
         
-        # Configure PAM for 2FA
-        sudo tee -a /etc/pam.d/sshd > /dev/null << 'PAM_EOF'
-# Google Authenticator
+        # Configure PAM for 2FA - ONLY for SSH
+        sudo tee /etc/pam.d/sshd-2fa > /dev/null << 'PAM_EOF'
+# PAM configuration for SSH with 2FA
+# Disable standard password auth for SSH
+auth requisite pam_succeed_if.so uid >= 1000 quiet_success
+# Require Google Authenticator
 auth required pam_google_authenticator.so
+# Allow access if 2FA succeeds
+auth required pam_permit.so
 PAM_EOF
+        
+        # Backup original PAM config
+        sudo cp /etc/pam.d/sshd /etc/pam.d/sshd.backup
+        
+        # Replace PAM config for SSH
+        sudo cp /etc/pam.d/sshd-2fa /etc/pam.d/sshd
         
         # Configure SSH for key auth and 2FA
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
@@ -358,12 +382,14 @@ PAM_EOF
         sudo sed -i 's/UsePAM.*/UsePAM yes/' /etc/ssh/sshd_config
         
         # Generate 2FA for user
-        sudo -u "$NEW_USER" google-authenticator -t -d -f -r 3 -R 30 -w 3
+        print_message "🔑 2FA kurulumu yapılıyor..." "$YELLOW"
+        print_message "📱 Aşağıdaki QR kodu Google Authenticator uygulamasına taratın:" "$BLUE"
+        sudo -u "$NEW_USER" google-authenticator -t -d -f -r 3 -R 30 -w 3 -Q UTF8
         
         print_message "✅ SSH anahtar çifti oluşturuldu:" "$GREEN"
         print_message "   • Private Key: $KEY_NAME" "$CYAN"
         print_message "   • Public Key: $KEY_NAME.pub" "$CYAN"
-        print_message "✅ 2FA yapılandırıldı. Google Authenticator uygulamasına QR kodu taratın." "$GREEN"
+        print_message "✅ 2FA yapılandırıldı. Her girişte SSH anahtarı + Google Authenticator kodu gerekecek." "$GREEN"
         ;;
     *)
         print_message "\n❌ Geçersiz seçim! Varsayılan olarak SSH Anahtarı kullanılacak." "$RED"
@@ -382,15 +408,43 @@ PAM_EOF
         ;;
 esac
 
-# Add authentication settings to sshd_config
+# Add authentication settings to sshd_config - CRITICAL FIX for 2FA
+print_message "\n🔧 SSH KİMLİK DOĞRULAMA AYARLARI" "$CYAN"
+print_message "────────────────────────────────" "$BLUE"
+
+case $AUTH_CHOICE in
+    1)
+        # Password only
+        AUTH_METHODS="password"
+        ;;
+    2)
+        # Password + 2FA
+        AUTH_METHODS="password,keyboard-interactive"
+        ;;
+    3)
+        # SSH Key only
+        AUTH_METHODS="publickey"
+        ;;
+    4)
+        # SSH Key + 2FA
+        AUTH_METHODS="publickey,keyboard-interactive"
+        ;;
+    *)
+        AUTH_METHODS="publickey"
+        ;;
+esac
+
 sudo tee -a /etc/ssh/sshd_config > /dev/null << EOF
 
 # Authentication settings added by setup script
 PasswordAuthentication $PASSWORD_AUTH
 PubkeyAuthentication $PUBKEY_AUTH
 ChallengeResponseAuthentication yes
-AuthenticationMethods $(if [[ $PASSWORD_AUTH == "yes" && $PUBKEY_AUTH == "no" ]]; then echo "password"; elif [[ $PASSWORD_AUTH == "no" && $PUBKEY_AUTH == "yes" ]]; then echo "publickey"; elif [[ $PUBKEY_AUTH == "yes" && ($AUTH_CHOICE == "2" || $AUTH_CHOICE == "4") ]]; then echo "publickey,keyboard-interactive"; fi)
+UsePAM yes
+AuthenticationMethods $AUTH_METHODS
 EOF
+
+print_message "✅ Kimlik doğrulama yöntemleri ayarlandı: $AUTH_METHODS" "$GREEN"
 
 # Configure UFW firewall
 print_message "\n🔥 GÜVENLİK DUVARI (UFW) KONFİGÜRASYONU" "$CYAN"
@@ -479,11 +533,6 @@ echo "📋 YAPILAN İŞLEMLER:"
 echo "1. Private key ~/linux/$SERVER_HOSTNAME dosyasına kaydedildi"
 echo "2. Dosya izinleri ayarlandı (chmod 600)"
 echo ""
-echo "🔗 BAĞLANTI KOMUTU:"
-echo "   ssh -p 2222 -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS"
-echo ""
-echo "💡 İPUCU: Bağlanmak için ~/linux dizininde olmanıza gerek YOKTUR!"
-echo "         Yukarıdaki komutu herhangi bir dizinden çalıştırabilirsiniz."
 EOF
 
     sudo chmod +x "$CLIENT_SCRIPT"
@@ -502,11 +551,6 @@ EOF
     print_message "3. 🔐 Dosya izinlerini ayarlayın:" "$CYAN"
     print_message "   chmod 600 $SERVER_HOSTNAME" "$GREEN"
     echo ""
-    print_message "✅ Artık bağlanabilirsiniz:" "$GREEN"
-    print_message "   ssh -p 2222 -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
-    echo ""
-    print_message "💡 İPUCU: Eğer genel IP kullanacaksanız:" "$BLUE"
-    print_message "   ssh -p 2222 -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP" "$GREEN"
 fi
 
 # Create summary
@@ -538,16 +582,33 @@ if [[ $AUTH_CHOICE == "3" || $AUTH_CHOICE == "4" || -z "$AUTH_CHOICE" ]]; then
 fi
 
 print_message "🚀 BAĞLANTI KOMUTLARI:" "$CYAN"
-if [[ $AUTH_CHOICE == "1" || $AUTH_CHOICE == "2" ]]; then
+if [[ $AUTH_CHOICE == "1" ]]; then
     print_message "• ssh -p $SSH_PORT $NEW_USER@$IP_ADDRESS" "$GREEN"
     if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
         print_message "• veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP" "$GREEN"
     fi
+elif [[ $AUTH_CHOICE == "2" ]]; then
+    print_message "• ssh -p $SSH_PORT $NEW_USER@$IP_ADDRESS" "$GREEN"
+    if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
+        print_message "• veya: ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP" "$GREEN"
+    fi
+    print_message "📱 Her girişte Google Authenticator kodu gerekecek" "$YELLOW"
 else
     print_message "• ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
     if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
         print_message "• veya: ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP" "$GREEN"
     fi
+    if [[ $AUTH_CHOICE == "4" ]]; then
+        print_message "📱 Her girişte Google Authenticator kodu gerekecek (SSH key'den sonra)" "$YELLOW"
+    fi
+fi
+echo ""
+print_message "🔧 2FA NOTLARI:" "$PURPLE"
+if [[ $AUTH_CHOICE == "2" || $AUTH_CHOICE == "4" ]]; then
+    print_message "• SSH + 2FA her bağlantıda 2FA kodu ister" "$YELLOW"
+    print_message "• QR kodu Google Authenticator uygulamasına taratıldı" "$YELLOW"
+    print_message "• 2FA kodları 30 saniyede bir değişir" "$YELLOW"
+    print_message "• Yedek kurtarma kodlarını güvenli bir yerde saklayın" "$YELLOW"
 fi
 echo ""
 print_message "🛡️  GÜVENLİK NOTLARI:" "$RED"
@@ -600,6 +661,15 @@ else
     if [ "$PUBLIC_IP" != "Bilinmiyor" ]; then
         echo "veya: ssh -p $SSH_PORT -i ~/linux/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP"
     fi
+fi)
+
+$(if [[ $AUTH_CHOICE == "2" || $AUTH_CHOICE == "4" ]]; then
+echo ""
+echo "2FA NOTLARI:"
+echo "• SSH + 2FA her bağlantıda Google Authenticator kodu ister"
+echo "• QR kodu Google Authenticator uygulamasına taratıldı"
+echo "• 2FA kodları 30 saniyede bir değişir"
+echo "• Yedek kurtarma kodlarını güvenli bir yerde saklayın"
 fi)
 
 KURULUM TARİHİ: $(date)
