@@ -647,62 +647,97 @@ manage_ssh_keys() {
         print_message "\n🔑 SSH ANAHTAR YÖNETİMİ" "$CYAN"
         print_message "───────────────────────" "$BLUE"
         
-        # SERVER_HOSTNAME tanımlı değilse, hostname'i al
-        if [[ -z "${SERVER_HOSTNAME:-}" ]]; then
-            SERVER_HOSTNAME=$(hostname | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
-            if [ -z "$SERVER_HOSTNAME" ]; then
-                SERVER_HOSTNAME="server"
-            fi
+        # Sunucu hostname'ini al
+        SERVER_HOSTNAME=$(hostname | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+        if [ -z "$SERVER_HOSTNAME" ]; then
+            SERVER_HOSTNAME="server"
         fi
         
         KEY_NAME="$SERVER_HOSTNAME"
+        IP_ADDRESS=$(hostname -I | awk '{print $1}')
         
         print_message "\n📋 İSTEMCİ TARAFINDA YAPILACAKLAR:" "$YELLOW"
         print_message "──────────────────────────────────" "$BLUE"
         echo ""
-        print_message "1. İstemci bilgisayarınızda terminal açın" "$GREEN"
-        print_message "2. SSH anahtar çifti oluşturun:" "$GREEN"
+        print_message "AŞAMA 1: İstemcide SSH anahtar çifti oluşturun:" "$GREEN"
         print_message "   ssh-keygen -t ed25519 -f ~/.ssh/$KEY_NAME" "$CYAN"
-        print_message "   (Parola kısmını boş bırakabilirsiniz - Enter'a basın)" "$YELLOW"
-        print_message "3. Dosya izinlerini ayarlayın:" "$GREEN"
+        print_message "   (Parola kısmını boş bırakabilirsiniz - sadece Enter'a basın)" "$YELLOW"
+        echo ""
+        print_message "AŞAMA 2: Private key izinlerini ayarlayın:" "$GREEN"
         print_message "   chmod 600 ~/.ssh/$KEY_NAME" "$CYAN"
-        print_message "4. Public key içeriğini görüntüleyin:" "$GREEN"
+        echo ""
+        print_message "AŞAMA 3: Public key içeriğini görüntüleyin:" "$GREEN"
         print_message "   cat ~/.ssh/$KEY_NAME.pub" "$CYAN"
-        print_message "5. Aşağıdaki satıra public key içeriğini kopyalayıp yapıştırın" "$GREEN"
         echo ""
-        print_message "📋 PUBLIC KEY İÇERİĞİNİ AŞAĞIYA YAPIŞTIRIN:" "$YELLOW"
-        print_message "(Tüm satırı kopyalayıp yapıştırın, Ctrl+D ile bitirin)" "$BLUE"
-        print_message "Örnek: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." "$YELLOW"
+        print_message "AŞAMA 4: Aşağıdaki satıra public key içeriğini KOPYALAYIP YAPIŞTIRIN:" "$RED"
+        print_message "(Tüm satırı kopyalayın, Ctrl+D ile bitirin)" "$BLUE"
+        print_message "Örnek format: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." "$YELLOW"
+        echo ""
+        print_message "⚠️  DİKKAT: Public key'i doğru kopyaladığınızdan emin olun!" "$RED"
+        echo "════════════════════════════════════════════════════════════════════════════════"
         echo ""
         
-        # Public key'i oku
-        PUBLIC_KEY=$(cat)
+        # Kullanıcıdan public key al
+        print_message "📋 PUBLIC KEY İÇERİĞİNİ YAPIŞTIRIN (Ctrl+D ile bitirin):" "$GREEN"
+        print_message "─────────────────────────────────────────────────────────" "$BLUE"
         
-        if [[ -n "$PUBLIC_KEY" ]]; then
+        # Public key'i oku (birden fazla satır olabilir)
+        PUBLIC_KEY=""
+        while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+                PUBLIC_KEY+="$line"$'\n'
+            fi
+        done
+        
+        # Trim whitespace
+        PUBLIC_KEY=$(echo "$PUBLIC_KEY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        
+        if [[ -n "$PUBLIC_KEY" ]] && [[ "$PUBLIC_KEY" =~ ^ssh- ]]; then
             # .ssh dizinini oluştur
             sudo -u "$NEW_USER" mkdir -p "/home/$NEW_USER/.ssh"
             
-            # authorized_keys dosyasına ekle
+            # authorized_keys dosyasına ekle (append)
             echo "$PUBLIC_KEY" | sudo -u "$NEW_USER" tee -a "/home/$NEW_USER/.ssh/authorized_keys" > /dev/null
             
             # İzinleri ayarla
             sudo chmod 700 "/home/$NEW_USER/.ssh"
             sudo chmod 600 "/home/$NEW_USER/.ssh/authorized_keys"
+            sudo chown -R "$NEW_USER:$NEW_USER" "/home/$NEW_USER/.ssh"
             
-            print_message "\n✅ Public key başarıyla eklendi" "$GREEN"
-            print_message "• Key: ~/.ssh/authorized_keys dosyasına kaydedildi" "$CYAN"
+            print_message "\n✅ PUBLIC KEY BAŞARIYLA KAYDEDİLDİ" "$GREEN"
+            print_message "• Dosya: /home/$NEW_USER/.ssh/authorized_keys" "$CYAN"
+            print_message "• Key tipi: $(echo "$PUBLIC_KEY" | awk '{print $1}')" "$CYAN"
+            print_message "• Key parmak izi: $(echo "$PUBLIC_KEY" | ssh-keygen -lf - 2>/dev/null | awk '{print $2}' || echo "Bilinmiyor")" "$CYAN"
             
-            # Bağlantı komutunu göster
-            IP_ADDRESS=$(hostname -I | awk '{print $1}')
-            print_message "\n🔗 BAĞLANTI KOMUTU:" "$CYAN"
-            print_message "ssh -p $SSH_PORT -i ~/.ssh/$KEY_NAME $NEW_USER@$IP_ADDRESS" "$GREEN"
-            
-            log_message "Public key eklendi: ${PUBLIC_KEY:0:50}..."
+            log_message "Public key eklendi: $(echo "$PUBLIC_KEY" | awk '{print $1 " " $2}' | head -c 50)..."
         else
-            print_message "⚠️  Public key girilmedi!" "$YELLOW"
-            print_message "ℹ️  SSH anahtar doğrulama kullanılamayacak." "$BLUE"
-            print_message "ℹ️  Daha sonra public key'i şuraya ekleyebilirsiniz:" "$BLUE"
-            print_message "    sudo nano /home/$NEW_USER/.ssh/authorized_keys" "$GREEN"
+            print_message "\n❌ GEÇERSİZ PUBLIC KEY!" "$RED"
+            print_message "Public key ssh- ile başlamalıdır. Örnek:" "$YELLOW"
+            print_message "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." "$GREEN"
+            print_message "\nℹ️  Daha sonra manuel olarak ekleyebilirsiniz:" "$BLUE"
+            print_message "sudo nano /home/$NEW_USER/.ssh/authorized_keys" "$CYAN"
+            print_message "veya" "$BLUE"
+            print_message "ssh-copy-id -p $SSH_PORT -i ~/.ssh/$KEY_NAME $NEW_USER@$IP_ADDRESS" "$CYAN"
+        fi
+        
+        # Bağlantı testi için komut göster
+        print_message "\n🔗 BAĞLANTI TESTİ:" "$CYAN"
+        print_message "─────────────────" "$BLUE"
+        print_message "SSH anahtarınızla bağlantıyı test edin:" "$GREEN"
+        print_message "ssh -p $SSH_PORT -i ~/.ssh/$KEY_NAME $NEW_USER@$IP_ADDRESS" "$YELLOW"
+        
+        if check_internet; then
+            PUBLIC_IP=$(curl -s --connect-timeout 3 icanhazip.com 2>/dev/null || echo "")
+            if [[ -n "$PUBLIC_IP" ]]; then
+                print_message "veya:" "$BLUE"
+                print_message "ssh -p $SSH_PORT -i ~/.ssh/$KEY_NAME $NEW_USER@$PUBLIC_IP" "$YELLOW"
+            fi
+        fi
+        
+        # 2FA ile birlikte kullanılacaksa ek bilgi
+        if [[ "$AUTH_CHOICE" == "4" ]]; then
+            print_message "\n📱 2FA NOTU:" "$CYAN"
+            print_message "Bağlantı sırasında SSH anahtarınızdan sonra Google Authenticator kodu istenecektir." "$YELLOW"
         fi
     fi
 }
@@ -796,7 +831,7 @@ show_summary() {
     
     local PUBLIC_IP
     if check_internet; then
-        PUBLIC_IP=$(curl -s --connect-timeout 3 icanhazip.com || echo "Bilinmiyor")
+        PUBLIC_IP=$(curl -s --connect-timeout 3 icanhazip.com 2>/dev/null || echo "Bilinmiyor")
     else
         PUBLIC_IP="Bilinmiyor"
     fi
@@ -822,32 +857,46 @@ show_summary() {
     print_message "• Güvenlik Seviyesi: $SECURITY_LEVEL" "$YELLOW"
     print_message "• Root Girişi:      Devre Dışı" "$YELLOW"
     print_message "• Max Bağlantı:     3 eşzamanlı" "$YELLOW"
-    print_message "• Fail2Ban:         Aktif" "$YELLOW"
+    print_message "• Fail2Ban:         Aktif (5 deneme)" "$YELLOW"
     print_message "• Güvenlik Duvarı:  Aktif" "$YELLOW"
     echo ""
     
+    # SSH anahtar bağlantısı için özel bölüm
     if [[ "$AUTH_CHOICE" == "3" || "$AUTH_CHOICE" == "4" ]]; then
-        print_message "🔑 SSH BAĞLANTI BİLGİLERİ:" "$CYAN"
-        print_message "• SSH Komutu:" "$GREEN"
-        print_message "  ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$YELLOW"
+        print_message "🔑 SSH ANAHTAR KURULUMU (İSTEMCİ TARAFI):" "$CYAN"
+        print_message "──────────────────────────────────────────" "$BLUE"
         
-        if [[ "$PUBLIC_IP" != "Bilinmiyor" ]]; then
-            print_message "  veya:" "$BLUE"
-            print_message "  ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP" "$YELLOW"
+        # Public key kontrolü
+        AUTH_KEYS_FILE="/home/$NEW_USER/.ssh/authorized_keys"
+        if [[ -f "$AUTH_KEYS_FILE" ]] && [[ -s "$AUTH_KEYS_FILE" ]]; then
+            KEY_COUNT=$(sudo -u "$NEW_USER" wc -l < "$AUTH_KEYS_FILE" 2>/dev/null || echo "0")
+            print_message "✅ Public key başarıyla eklendi ($KEY_COUNT key)" "$GREEN"
+        else
+            print_message "⚠️  Public key EKLENMEDİ! Manuel eklemeniz gerekecek." "$RED"
         fi
         
-        print_message "\n📋 İSTEMCİ KURULUMU:" "$CYAN"
-        print_message "1. SSH anahtarını oluştur: ssh-keygen -t ed25519 -f ~/.ssh/$SERVER_HOSTNAME" "$GREEN"
-        print_message "2. Private key izinlerini ayarla: chmod 600 ~/.ssh/$SERVER_HOSTNAME" "$GREEN"
-        print_message "3. Bağlan: ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
-    elif [[ "$AUTH_CHOICE" == "1" || "$AUTH_CHOICE" == "2" ]]; then
-        print_message "🔑 BAĞLANTI BİLGİLERİ:" "$CYAN"
-        print_message "• SSH Komutu:" "$GREEN"
-        print_message "  ssh -p $SSH_PORT $NEW_USER@$IP_ADDRESS" "$YELLOW"
+        print_message "\n📋 İSTEMCİ ADIMLARI:" "$YELLOW"
+        print_message "1. Anahtar oluştur:  ssh-keygen -t ed25519 -f ~/.ssh/$SERVER_HOSTNAME" "$GREEN"
+        print_message "2. İzinleri ayarla:  chmod 600 ~/.ssh/$SERVER_HOSTNAME" "$GREEN"
+        print_message "3. Public key'i kopyala: cat ~/.ssh/$SERVER_HOSTNAME.pub" "$GREEN"
+        print_message "4. Key'i sunucuya ekle: Yukarıdaki adımda yapıldı" "$GREEN"
+        print_message "5. Bağlan: ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
+        
+        print_message "\n🔗 HIZLI BAĞLANTI KOMUTU:" "$CYAN"
+        print_message "ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$YELLOW"
         
         if [[ "$PUBLIC_IP" != "Bilinmiyor" ]]; then
-            print_message "  veya:" "$BLUE"
-            print_message "  ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP" "$YELLOW"
+            print_message "veya:" "$BLUE"
+            print_message "ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP" "$YELLOW"
+        fi
+        
+    elif [[ "$AUTH_CHOICE" == "1" || "$AUTH_CHOICE" == "2" ]]; then
+        print_message "🔑 PAROLA BAĞLANTISI:" "$CYAN"
+        print_message "ssh -p $SSH_PORT $NEW_USER@$IP_ADDRESS" "$YELLOW"
+        
+        if [[ "$PUBLIC_IP" != "Bilinmiyor" ]]; then
+            print_message "veya:" "$BLUE"
+            print_message "ssh -p $SSH_PORT $NEW_USER@$PUBLIC_IP" "$YELLOW"
         fi
     fi
     
@@ -888,7 +937,19 @@ GÜVENLİK AYARLARI:
 • Güvenlik Duvarı:  Aktif
 
 $(if [[ "$AUTH_CHOICE" == "3" || "$AUTH_CHOICE" == "4" ]]; then
-echo "SSH ANAHTAR BAĞLANTISI:"
+echo "SSH ANAHTAR KURULUMU:"
+echo ""
+echo "İSTEMCİ TARAFINDA YAPILACAKLAR:"
+echo "1. SSH anahtar çifti oluşturun:"
+echo "   ssh-keygen -t ed25519 -f ~/.ssh/$SERVER_HOSTNAME"
+echo "2. Private key izinlerini ayarlayın:"
+echo "   chmod 600 ~/.ssh/$SERVER_HOSTNAME"
+echo "3. Public key içeriğini görüntüleyin:"
+echo "   cat ~/.ssh/$SERVER_HOSTNAME.pub"
+echo "4. Public key'i aşağıdaki adrese kopyalayın:"
+echo "   /home/$NEW_USER/.ssh/authorized_keys"
+echo ""
+echo "BAĞLANTI KOMUTU:"
 echo "ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS"
 if [[ "$PUBLIC_IP" != "Bilinmiyor" ]]; then
 echo "veya: ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP"
@@ -916,15 +977,19 @@ fi)
 
 KURULUM TARİHİ: $(date)
 LOG DOSYASI: $LOG_FILE
+
+ÖNEMLİ NOT: SSH anahtarınızı ve 2FA kurtarma kodlarını güvenli bir yerde saklayın!
 EOF
     
     sudo chown "$NEW_USER:$NEW_USER" "$SUMMARY_FILE"
-    sudo chmod 644 "$SUMMARY_FILE"
+    sudo chmod 600 "$SUMMARY_FILE"
     
     print_message "\n📄 Özet dosyası: $SUMMARY_FILE" "$BLUE"
+    print_message "   (Bu dosyada tüm bağlantı bilgileri ve komutlar mevcut)" "$CYAN"
 }
 
 # Ana kurulum fonksiyonu
+# Ana kurulum fonksiyonunda sıralamayı düzelt
 main() {
     clear
     print_message "\n🎯 ============================================" "$PURPLE"
@@ -965,7 +1030,7 @@ main() {
     # SSH konfigürasyonu
     configure_ssh
     
-    # 2FA konfigürasyonu (esnek hata yakalama)
+    # 2FA konfigürasyonu
     if [[ "$AUTH_CHOICE" == "2" || "$AUTH_CHOICE" == "4" ]]; then
         # Geçici olarak hata yakalamayı devre dışı bırak
         set +e
@@ -973,6 +1038,20 @@ main() {
         
         print_message "\n🔄 2FA konfigürasyonu başlatılıyor..." "$YELLOW"
         configure_2fa
+        
+        # Hata yakalamayı ve trap'i geri yükle
+        set -e
+        trap 'echo -e "\033[0;31m❌ Beklenmedik hata oluştu. Script durduruldu.\033[0m"' ERR
+    fi
+    
+    # SSH anahtar yönetimi
+    if [[ "$AUTH_CHOICE" == "3" || "$AUTH_CHOICE" == "4" ]]; then
+        # Geçici olarak hata yakalamayı devre dışı bırak
+        set +e
+        trap - ERR
+        
+        print_message "\n🔄 SSH anahtar yönetimi başlatılıyor..." "$YELLOW"
+        manage_ssh_keys
         
         # Hata yakalamayı ve trap'i geri yükle
         set -e
