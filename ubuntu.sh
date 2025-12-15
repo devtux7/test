@@ -670,55 +670,78 @@ manage_ssh_keys() {
         print_message "   cat ~/.ssh/$KEY_NAME.pub" "$CYAN"
         echo ""
         print_message "AŞAMA 4: Aşağıdaki satıra public key içeriğini KOPYALAYIP YAPIŞTIRIN:" "$RED"
-        print_message "(Tüm satırı kopyalayın, Ctrl+D ile bitirin)" "$BLUE"
+        print_message "(Tüm satırı kopyalayın, ENTER + Ctrl+D ile bitirin)" "$BLUE"
         print_message "Örnek format: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." "$YELLOW"
         echo ""
         print_message "⚠️  DİKKAT: Public key'i doğru kopyaladığınızdan emin olun!" "$RED"
         echo "════════════════════════════════════════════════════════════════════════════════"
         echo ""
         
-        # Kullanıcıdan public key al
-        print_message "📋 PUBLIC KEY İÇERİĞİNİ YAPIŞTIRIN (Ctrl+D ile bitirin):" "$GREEN"
-        print_message "─────────────────────────────────────────────────────────" "$BLUE"
-        
-        # Public key'i oku (birden fazla satır olabilir)
-        PUBLIC_KEY=""
-        while IFS= read -r line; do
-            if [[ -n "$line" ]]; then
-                PUBLIC_KEY+="$line"$'\n'
+        # Public key alma döngüsü - doğru key girilene kadar devam et
+        while true; do
+            print_message "📋 PUBLIC KEY İÇERİĞİNİ YAPIŞTIRIN (ENTER + Ctrl+D ile bitirin):" "$GREEN"
+            print_message "─────────────────────────────────────────────────────────" "$BLUE"
+            
+            # Public key'i oku (birden fazla satır olabilir)
+            PUBLIC_KEY=""
+            while IFS= read -r line; do
+                if [[ -n "$line" ]]; then
+                    PUBLIC_KEY+="$line"$'\n'
+                fi
+            done
+            
+            # Trim whitespace (baştaki ve sondaki boşlukları temizle)
+            PUBLIC_KEY=$(echo "$PUBLIC_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            
+            # SSH key formatını kontrol et (daha esnek regex)
+            if [[ -n "$PUBLIC_KEY" ]] && [[ "$PUBLIC_KEY" =~ ^(ssh-(ed25519|rsa|dss|ecdsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)) ]]; then
+                print_message "\n✅ PUBLIC KEY FORMATI DOĞRU" "$GREEN"
+                print_message "Key tipi: $(echo "$PUBLIC_KEY" | awk '{print $1}')" "$CYAN"
+                
+                # .ssh dizinini oluştur
+                sudo -u "$NEW_USER" mkdir -p "/home/$NEW_USER/.ssh" 2>/dev/null || true
+                
+                # authorized_keys dosyasına ekle (append)
+                echo "$PUBLIC_KEY" | sudo -u "$NEW_USER" tee -a "/home/$NEW_USER/.ssh/authorized_keys" > /dev/null
+                
+                # İzinleri ayarla
+                sudo chmod 700 "/home/$NEW_USER/.ssh" 2>/dev/null || true
+                sudo chmod 600 "/home/$NEW_USER/.ssh/authorized_keys" 2>/dev/null || true
+                sudo chown -R "$NEW_USER:$NEW_USER" "/home/$NEW_USER/.ssh" 2>/dev/null || true
+                
+                # Key parmak izini al
+                KEY_FINGERPRINT=$(echo "$PUBLIC_KEY" | ssh-keygen -lf - 2>/dev/null | awk '{print $2}' || echo "Bilinmiyor")
+                
+                print_message "\n✅ PUBLIC KEY BAŞARIYLA KAYDEDİLDİ" "$GREEN"
+                print_message "• Dosya: /home/$NEW_USER/.ssh/authorized_keys" "$CYAN"
+                print_message "• Key tipi: $(echo "$PUBLIC_KEY" | awk '{print $1}')" "$CYAN"
+                print_message "• Key parmak izi: $KEY_FINGERPRINT" "$CYAN"
+                print_message "• Key uzunluğu: $(echo "$PUBLIC_KEY" | awk '{print $2}' | wc -c) karakter" "$CYAN"
+                
+                log_message "Public key eklendi: $(echo "$PUBLIC_KEY" | awk '{print $1}') - $KEY_FINGERPRINT"
+                break  # Başarılı, döngüden çık
+                
+            else
+                print_message "\n❌ GEÇERSİZ PUBLIC KEY FORMATI!" "$RED"
+                print_message "Lütfen aşağıdaki formatlardan birini kullandığınızdan emin olun:" "$YELLOW"
+                print_message "• ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." "$GREEN"
+                print_message "• ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC..." "$GREEN"
+                print_message "• ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAI..." "$GREEN"
+                print_message "" "$NC"
+                print_message "Kopyaladığınız key:" "$BLUE"
+                echo "\"$PUBLIC_KEY\""
+                print_message "" "$NC"
+                print_message "Tekrar denemek ister misiniz? (e/h): " "$YELLOW"
+                read -r retry_choice
+                
+                if [[ ! $retry_choice =~ ^[Ee]([Ee]vet)?$ ]]; then
+                    print_message "⚠️  SSH anahtarı eklenmedi. Manuel olarak eklemeniz gerekecek." "$RED"
+                    print_message "Manuel ekleme komutu:" "$BLUE"
+                    print_message "ssh-copy-id -p $SSH_PORT -i ~/.ssh/$KEY_NAME $NEW_USER@$IP_ADDRESS" "$CYAN"
+                    break
+                fi
             fi
         done
-        
-        # Trim whitespace
-        PUBLIC_KEY=$(echo "$PUBLIC_KEY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        
-        if [[ -n "$PUBLIC_KEY" ]] && [[ "$PUBLIC_KEY" =~ ^ssh- ]]; then
-            # .ssh dizinini oluştur
-            sudo -u "$NEW_USER" mkdir -p "/home/$NEW_USER/.ssh"
-            
-            # authorized_keys dosyasına ekle (append)
-            echo "$PUBLIC_KEY" | sudo -u "$NEW_USER" tee -a "/home/$NEW_USER/.ssh/authorized_keys" > /dev/null
-            
-            # İzinleri ayarla
-            sudo chmod 700 "/home/$NEW_USER/.ssh"
-            sudo chmod 600 "/home/$NEW_USER/.ssh/authorized_keys"
-            sudo chown -R "$NEW_USER:$NEW_USER" "/home/$NEW_USER/.ssh"
-            
-            print_message "\n✅ PUBLIC KEY BAŞARIYLA KAYDEDİLDİ" "$GREEN"
-            print_message "• Dosya: /home/$NEW_USER/.ssh/authorized_keys" "$CYAN"
-            print_message "• Key tipi: $(echo "$PUBLIC_KEY" | awk '{print $1}')" "$CYAN"
-            print_message "• Key parmak izi: $(echo "$PUBLIC_KEY" | ssh-keygen -lf - 2>/dev/null | awk '{print $2}' || echo "Bilinmiyor")" "$CYAN"
-            
-            log_message "Public key eklendi: $(echo "$PUBLIC_KEY" | awk '{print $1 " " $2}' | head -c 50)..."
-        else
-            print_message "\n❌ GEÇERSİZ PUBLIC KEY!" "$RED"
-            print_message "Public key ssh- ile başlamalıdır. Örnek:" "$YELLOW"
-            print_message "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." "$GREEN"
-            print_message "\nℹ️  Daha sonra manuel olarak ekleyebilirsiniz:" "$BLUE"
-            print_message "sudo nano /home/$NEW_USER/.ssh/authorized_keys" "$CYAN"
-            print_message "veya" "$BLUE"
-            print_message "ssh-copy-id -p $SSH_PORT -i ~/.ssh/$KEY_NAME $NEW_USER@$IP_ADDRESS" "$CYAN"
-        fi
         
         # Bağlantı testi için komut göster
         print_message "\n🔗 BAĞLANTI TESTİ:" "$CYAN"
