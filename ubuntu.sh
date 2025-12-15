@@ -898,12 +898,12 @@ show_summary() {
             print_message "⚠️  Public key EKLENMEDİ! Manuel eklemeniz gerekecek." "$RED"
         fi
         
-        print_message "\n📋 İSTEMCİ ADIMLARI:" "$YELLOW"
-        print_message "1. Anahtar oluştur:  ssh-keygen -t ed25519 -f ~/.ssh/$SERVER_HOSTNAME" "$GREEN"
-        print_message "2. İzinleri ayarla:  chmod 600 ~/.ssh/$SERVER_HOSTNAME" "$GREEN"
-        print_message "3. Public key'i kopyala: cat ~/.ssh/$SERVER_HOSTNAME.pub" "$GREEN"
-        print_message "4. Key'i sunucuya ekle: Yukarıdaki adımda yapıldı" "$GREEN"
-        print_message "5. Bağlan: ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
+        # print_message "\n📋 İSTEMCİ ADIMLARI:" "$YELLOW"
+        # print_message "1. Anahtar oluştur:  ssh-keygen -t ed25519 -f ~/.ssh/$SERVER_HOSTNAME" "$GREEN"
+        # print_message "2. İzinleri ayarla:  chmod 600 ~/.ssh/$SERVER_HOSTNAME" "$GREEN"
+        # print_message "3. Public key'i kopyala: cat ~/.ssh/$SERVER_HOSTNAME.pub" "$GREEN"
+        # print_message "4. Key'i sunucuya ekle: Yukarıdaki adımda yapıldı" "$GREEN"
+        # print_message "5. Bağlan: ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$GREEN"
         
         print_message "\n🔗 HIZLI BAĞLANTI KOMUTU:" "$CYAN"
         print_message "ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS" "$YELLOW"
