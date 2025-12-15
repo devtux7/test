@@ -886,16 +886,33 @@ show_summary() {
         print_message "🔑 SSH ANAHTAR DURUMU:" "$CYAN"
         print_message "─────────────────────" "$BLUE"
         
-        # Public key kontrolü
+        # Public key kontrolü - daha güvenilir bir yaklaşım
         AUTH_KEYS_FILE="/home/$NEW_USER/.ssh/authorized_keys"
-        if [[ -f "$AUTH_KEYS_FILE" ]] && [[ -s "$AUTH_KEYS_FILE" ]]; then
-            KEY_COUNT=$(sudo -u "$NEW_USER" wc -l < "$AUTH_KEYS_FILE" 2>/dev/null || echo "0")
-            KEY_TYPE=$(sudo -u "$NEW_USER" head -1 "$AUTH_KEYS_FILE" 2>/dev/null | awk '{print $1}' || echo "Bilinmiyor")
-            print_message "✅ Public key başarıyla eklendi" "$GREEN"
-            print_message "   • Key sayısı: $KEY_COUNT" "$CYAN"
-            print_message "   • Key tipi: $KEY_TYPE" "$CYAN"
+        
+        # Dosyayı daha basit bir şekilde kontrol et
+        if sudo test -f "$AUTH_KEYS_FILE" && sudo test -s "$AUTH_KEYS_FILE"; then
+            # Dosya varsa ve boş değilse
+            KEY_COUNT=$(sudo cat "$AUTH_KEYS_FILE" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+            KEY_TYPE=$(sudo head -1 "$AUTH_KEYS_FILE" 2>/dev/null | awk '{print $1}' || echo "Bilinmiyor")
+            
+            if [ "$KEY_COUNT" -gt 0 ]; then
+                print_message "✅ Public key başarıyla eklendi" "$GREEN"
+                print_message "   • Key sayısı: $KEY_COUNT" "$CYAN"
+                print_message "   • Key tipi: $KEY_TYPE" "$CYAN"
+                
+                # Key parmak izini göster
+                if command -v ssh-keygen >/dev/null 2>&1; then
+                    FINGERPRINT=$(sudo head -1 "$AUTH_KEYS_FILE" 2>/dev/null | ssh-keygen -lf - 2>/dev/null | awk '{print $2}')
+                    if [ -n "$FINGERPRINT" ]; then
+                        print_message "   • Key parmak izi: $FINGERPRINT" "$CYAN"
+                    fi
+                fi
+            else
+                print_message "❌ Public key dosyası boş!" "$RED"
+            fi
         else
             print_message "❌ Public key EKLENMEDİ!" "$RED"
+            print_message "   • Dosya bulunamadı veya boş" "$YELLOW"
         fi
         
         print_message "\n🔗 BAĞLANTI KOMUTU:" "$CYAN"
@@ -933,6 +950,13 @@ show_summary() {
     
     # Özet dosyasını kullanıcı dizinine kaydet
     SUMMARY_FILE="/home/$NEW_USER/ssh_kurulum_ozeti.txt"
+    
+    # SSH anahtar durumunu özet dosyası için de kontrol et
+    SSH_KEY_STATUS="❌ EKLENMEDİ"
+    if sudo test -f "/home/$NEW_USER/.ssh/authorized_keys" && sudo test -s "/home/$NEW_USER/.ssh/authorized_keys"; then
+        SSH_KEY_STATUS="✅ EKLENDİ"
+    fi
+    
     sudo tee "$SUMMARY_FILE" > /dev/null << EOF
 SSH KURULUM ÖZETİ - $(date)
 ════════════════════════════════════════════════════════════════════════════════
@@ -953,7 +977,9 @@ GÜVENLİK AYARLARI:
 • Güvenlik Duvarı:  Aktif
 
 $(if [[ "$AUTH_CHOICE" == "3" || "$AUTH_CHOICE" == "4" ]]; then
-echo "SSH BAĞLANTI KOMUTU:"
+echo "SSH ANAHTAR DURUMU: $SSH_KEY_STATUS"
+echo ""
+echo "BAĞLANTI KOMUTU:"
 echo "ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$IP_ADDRESS"
 if [[ "$PUBLIC_IP" != "Bilinmiyor" ]]; then
 echo "veya: ssh -p $SSH_PORT -i ~/.ssh/$SERVER_HOSTNAME $NEW_USER@$PUBLIC_IP"
