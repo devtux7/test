@@ -487,6 +487,9 @@ PAMEOF
         # Secret key oluştur
         GA_SECRET=$(head -c 64 /dev/urandom | base32 | tr -d = | head -c 16)
         
+        # Kurtarma kodları için dizi oluştur
+        RECOVERY_CODES_ARRAY=()
+        
         # Google Authenticator dosya formatı:
         # Line 1: Secret key
         # Line 2-6: Recovery codes
@@ -498,14 +501,15 @@ PAMEOF
         # Secret key'i dosyaya yaz
         echo "$GA_SECRET" | sudo tee "$GA_SECRET_FILE" > /dev/null
         
-        # Boş satır
+        # Boş satır ekle
         echo "" | sudo tee -a "$GA_SECRET_FILE" > /dev/null
         
-        # 5 kurtarma kodu oluştur
+        # 5 kurtarma kodu oluştur ve hem dosyaya yaz hem de diziye kaydet
         print_message "🔑 Kurtarma kodları oluşturuluyor..." "$YELLOW"
         for i in {1..5}; do
             RECOVERY_CODE=$(head -c 32 /dev/urandom | base32 | tr -d = | head -c 16)
             echo "$RECOVERY_CODE" | sudo tee -a "$GA_SECRET_FILE" > /dev/null
+            RECOVERY_CODES_ARRAY+=("$RECOVERY_CODE")
         done
         
         # Ayarları ekle
@@ -534,13 +538,13 @@ PAMEOF
         # QR kodu oluştur
         if command -v qrencode &> /dev/null; then
             # UTF8 QR kodu
-            QR_OUTPUT=$(echo "$TOTP_URI" | qrencode -t UTF8 2>/dev/null)
-            if [ $? -eq 0 ]; then
+            QR_OUTPUT=$(echo "$TOTP_URI" | qrencode -t UTF8 -s 1 -m 2 2>&1)
+            if [ $? -eq 0 ] && [ -n "$QR_OUTPUT" ]; then
                 echo "$QR_OUTPUT"
             else
                 # ANSIUTF8 QR kodu
-                QR_OUTPUT=$(echo "$TOTP_URI" | qrencode -t ANSIUTF8 2>/dev/null)
-                if [ $? -eq 0 ]; then
+                QR_OUTPUT=$(echo "$TOTP_URI" | qrencode -t ANSIUTF8 -s 1 -m 2 2>&1)
+                if [ $? -eq 0 ] && [ -n "$QR_OUTPUT" ]; then
                     echo "$QR_OUTPUT"
                 else
                     print_message "⚠️  QR kodu oluşturulamadı, secret key'i manuel ekleyin." "$YELLOW"
@@ -587,27 +591,48 @@ PAMEOF
             print_message "⚠️  Doğrulama başarısız oldu. Kurtarma kodları oluşturuldu ancak test edilemedi." "$YELLOW"
         fi
         
-        # Kurtarma kodlarını göster
+        # Kurtarma kodlarını göster - DÜZELTİLDİ!
         print_message "\n🔑 KURTARMA KODLARI" "$RED"
         print_message "──────────────────" "$BLUE"
         print_message "Bu kodları GÜVENLİ bir yere kaydedin!" "$RED"
+        print_message "──────────────────────────────────────" "$BLUE"
         
-        # .google_authenticator dosyasından kurtarma kodlarını oku (2-6. satırlar)
-        if [ -f "$GA_SECRET_FILE" ]; then
-            # 2-6. satırları al (kurtarma kodları)
-            RECOVERY_CODES=$(sudo sed -n '2,6p' "$GA_SECRET_FILE" 2>/dev/null)
+        if [ ${#RECOVERY_CODES_ARRAY[@]} -gt 0 ]; then
+            for i in "${!RECOVERY_CODES_ARRAY[@]}"; do
+                code_num=$((i + 1))
+                print_message "$code_num. ${RECOVERY_CODES_ARRAY[$i]}" "$YELLOW"
+            done
+            echo ""
+            print_message "⚠️  Bu kodları güvenli bir yere kaydedin! 2FA erişiminizi kaybederseniz kurtarma için kullanılacak." "$RED"
+        else
+            # Diziden gösterilemediyse dosyadan okumayı dene
+            print_message "\nℹ️  Diziden okunamadı, dosyadan okunuyor..." "$YELLOW"
             
-            if [ -n "$RECOVERY_CODES" ]; then
-                echo ""
-                echo "$RECOVERY_CODES" | while IFS= read -r line; do
-                    if [ -n "$line" ]; then
-                        print_message "   $line" "$YELLOW"
+            # Dosya varsa kurtarma kodlarını oku
+            if [ -f "$GA_SECRET_FILE" ]; then
+                # 2-6. satırları al (kurtarma kodları)
+                RECOVERY_CODES=$(sudo -u "$NEW_USER" sed -n '2,6p' "$GA_SECRET_FILE" 2>/dev/null | grep -v '^"')
+                
+                if [ -n "$RECOVERY_CODES" ]; then
+                    line_num=1
+                    while IFS= read -r line; do
+                        if [ -n "$line" ] && [[ ! "$line" =~ ^[[:space:]]*$ ]] && [[ ! "$line" =~ ^\" ]]; then
+                            print_message "$line_num. $line" "$YELLOW"
+                            ((line_num++))
+                        fi
+                    done <<< "$RECOVERY_CODES"
+                    
+                    if [ $line_num -gt 1 ]; then
+                        echo ""
+                        print_message "⚠️  Bu kodları güvenli bir yere kaydedin! 2FA erişiminizi kaybederseniz kurtarma için kullanılacak." "$RED"
+                    else
+                        print_message "ℹ️  Dosyada kurtarma kodu bulunamadı." "$YELLOW"
                     fi
-                done
-                echo ""
-                print_message "⚠️  Bu kodları güvenli bir yere kaydedin! 2FA erişiminizi kaybederseniz kurtarma için kullanılacak." "$RED"
+                else
+                    print_message "ℹ️  Kurtarma kodları bulunamadı." "$YELLOW"
+                fi
             else
-                print_message "ℹ️  Kurtarma kodları oluşturulamadı." "$YELLOW"
+                print_message "ℹ️  .google_authenticator dosyası bulunamadı." "$YELLOW"
             fi
         fi
         
