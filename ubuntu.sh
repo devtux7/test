@@ -1,10 +1,10 @@
 #!/bin/bash
-
 # =============================================================================
 # GÜVENLİK AYARLARI VE HATA YAKALAMA
 # =============================================================================
 set -Eeuo pipefail
-trap 'echo -e "\033[0;31m❌ Beklenmedik hata oluştu. Script durduruldu.\033[0m"' ERR
+trap 'echo -e "\033[0;31m❌ Beklenmedik hata oluştu.
+Script durduruldu.\033[0m"' ERR
 trap 'echo -e "\033[0;31m\n❌ Kullanıcı tarafından iptal edildi.\033[0m"' INT
 
 # =============================================================================
@@ -126,26 +126,60 @@ manage_root_password() {
     done
 }
 
-# Kullanıcı oluşturma
-create_user() {
-    print_message "\n👥 YENİ KULLANICI OLUŞTURMA" "$CYAN"
-    print_message "──────────────────────────" "$BLUE"
-    
-    while true; do
-        read -p "✨ Yeni kullanıcı adı girin: " NEW_USER
-        
-        if [[ -z "$NEW_USER" ]]; then
-            print_message "❌ Kullanıcı adı boş olamaz!" "$RED"
-            continue
-        fi
-        
-        if id "$NEW_USER" &>/dev/null; then
-            print_message "ℹ️  Kullanıcı '$NEW_USER' zaten var. Mevcut kullanıcıyı kullanacaksınız." "$YELLOW"
+# =============================================================================
+# 👥 KULLANICI YÖNETİMİ (SEÇİMLİ)
+# =============================================================================
+print_message "\n👥 KULLANICI YÖNETİMİ" "$CYAN"
+print_message "────────────────────────────" "$BLUE"
+echo "1) Yeni bir kullanıcı hesabı oluştur (önerilir)"
+echo "2) Mevcut kullanıcı hesabı ile devam et"
+echo ""
+
+while true; do
+    read -p "Seçiminiz (1/2): " user_mgmt_choice
+    case $user_mgmt_choice in
+        1)
+            # Yeni kullanıcı oluşturma
+            create_user
             break
-        fi
+            ;;
+        2)
+            # Mevcut kullanıcı ile devam et
+            NEW_USER=$(whoami)
+            print_message "ℹ️ Mevcut kullanıcı ile devam ediliyor: $NEW_USER" "$YELLOW"
+            # Mevcut kullanıcıyı sudo ve sshusers grubuna ekle
+            sudo usermod -aG sudo "$NEW_USER"
+            sudo groupadd -f sshusers
+            sudo usermod -aG sshusers "$NEW_USER"
+            break
+            ;;
+        *)
+            print_message "❌ Geçersiz seçenek! Lütfen 1 veya 2 girin." "$RED"
+            ;;
+    esac
+done
+
+
+# # Kullanıcı oluşturma
+# create_user() {
+#     print_message "\n👥 YENİ KULLANICI OLUŞTURMA" "$CYAN"
+#     print_message "──────────────────────────" "$BLUE"
+    
+#     while true; do
+#         read -p "✨ Yeni kullanıcı adı girin: " NEW_USER
         
-        break
-    done
+#         if [[ -z "$NEW_USER" ]]; then
+#             print_message "❌ Kullanıcı adı boş olamaz!" "$RED"
+#             continue
+#         fi
+        
+#         if id "$NEW_USER" &>/dev/null; then
+#             print_message "ℹ️  Kullanıcı '$NEW_USER' zaten var. Mevcut kullanıcıyı kullanacaksınız." "$YELLOW"
+#             break
+#         fi
+        
+#         break
+#     done
     
     # Kullanıcı yoksa oluştur
     if ! id "$NEW_USER" &>/dev/null; then
@@ -1042,8 +1076,8 @@ main() {
     # Root parola yönetimi
     manage_root_password
     
-    # Kullanıcı oluşturma
-    create_user
+    # # Kullanıcı oluşturma
+    # create_user
     
     # SSH port ayarı
     configure_ssh_port
