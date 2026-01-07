@@ -1,10 +1,10 @@
 #!/bin/bash
+
 # =============================================================================
 # GÜVENLİK AYARLARI VE HATA YAKALAMA
 # =============================================================================
 set -Eeuo pipefail
-trap 'echo -e "\033[0;31m❌ Beklenmedik hata oluştu.
-Script durduruldu.\033[0m"' ERR
+trap 'echo -e "\033[0;31m❌ Beklenmedik hata oluştu. Script durduruldu.\033[0m"' ERR
 trap 'echo -e "\033[0;31m\n❌ Kullanıcı tarafından iptal edildi.\033[0m"' INT
 
 # =============================================================================
@@ -46,8 +46,7 @@ error_exit() {
 # Kontrol fonksiyonu
 check_command() {
     if ! command -v "$1" &> /dev/null; then
-        print_message "⚠️ $1 komutu bulunamadı.
-Kuruluyor..." "$YELLOW"
+        print_message "⚠️  $1 komutu bulunamadı. Kuruluyor..." "$YELLOW"
         sudo apt install -y "$1" >> "$LOG_FILE" 2>&1 || print_message "❌ $1 kurulumu başarısız" "$RED"
     fi
 }
@@ -62,8 +61,7 @@ check_root() {
 # İnternet kontrolü
 check_internet() {
     if ! ping -c 1 -W 2 google.com &> /dev/null; then
-        print_message "⚠️ İnternet bağlantısı yok.
-Bazı işlemler atlanacak." "$YELLOW"
+        print_message "⚠️  İnternet bağlantısı yok. Bazı işlemler atlanacak." "$YELLOW"
         return 1
     fi
     return 0
@@ -80,38 +78,113 @@ show_system_info() {
     print_message "• Yerel IP: $(hostname -I | awk '{print $1}')" "$YELLOW"
 }
 
-# =============================================================================
-# 👥 KULLANICI YÖNETİMİ (SEÇİMLİ)
-# =============================================================================
-print_message "\n👥 KULLANICI YÖNETİMİ" "$CYAN"
-print_message "────────────────────────────" "$BLUE"
-echo "1) Yeni bir kullanıcı hesabı oluştur (önerilir)"
-echo "2) Mevcut kullanıcı hesabı ile devam et"
-echo ""
+# Root parola yönetimi
+manage_root_password() {
+    print_message "\n🔐 ROOT PAROLA YÖNETİMİ" "$CYAN"
+    print_message "───────────────────────" "$BLUE"
+    
+    echo ""
+    echo "1) Varsayılan root parolasını değiştir (önerilen)"
+    echo "2) Mevcut root parolasını koru (riskli)"
+    echo ""
+    
+    while true; do
+        read -p "Seçiminiz (1/2): " root_choice
+        
+        case $root_choice in
+            1)
+                print_message "\n🔑 Yeni ROOT parolasını girin:" "$BLUE"
+                print_message "(Parola görünmez, kopyala-yapıştır desteklenir)" "$YELLOW"
+                read -rs root_pass1
+                echo ""
+                print_message "Parolayı tekrar girin:" "$YELLOW"
+                read -rs root_pass2
+                echo ""
+                
+                if [[ "$root_pass1" == "$root_pass2" && -n "$root_pass1" ]]; then
+                    echo "root:$root_pass1" | sudo chpasswd
+                    if [[ $? -eq 0 ]]; then
+                        print_message "✅ Root parolası başarıyla değiştirildi" "$GREEN"
+                        log_message "Root parolası değiştirildi"
+                        break
+                    else
+                        print_message "❌ Parola değiştirilemedi" "$RED"
+                    fi
+                else
+                    print_message "❌ Parolalar eşleşmiyor veya boş!" "$RED"
+                fi
+                ;;
+            2)
+                print_message "⚠️  Root parolasını değiştirmediğiniz için güvenlik riski oluşabilir!" "$RED"
+                log_message "Root parolası değiştirilmedi"
+                break
+                ;;
+            *)
+                print_message "❌ Geçersiz seçim!" "$RED"
+                ;;
+        esac
+    done
+}
 
-while true; do
-    read -p "Seçiminiz (1/2): " user_mgmt_choice
-    case $user_mgmt_choice in
-        1)
-            # Yeni kullanıcı oluşturma
-            create_user
+# Kullanıcı oluşturma
+create_user() {
+    print_message "\n👥 YENİ KULLANICI OLUŞTURMA" "$CYAN"
+    print_message "──────────────────────────" "$BLUE"
+    
+    while true; do
+        read -p "✨ Yeni kullanıcı adı girin: " NEW_USER
+        
+        if [[ -z "$NEW_USER" ]]; then
+            print_message "❌ Kullanıcı adı boş olamaz!" "$RED"
+            continue
+        fi
+        
+        if id "$NEW_USER" &>/dev/null; then
+            print_message "ℹ️  Kullanıcı '$NEW_USER' zaten var. Mevcut kullanıcıyı kullanacaksınız." "$YELLOW"
             break
-            ;;
-        2)
-            # Mevcut kullanıcı ile devam et
-            NEW_USER=$(whoami)
-            print_message "ℹ️ Mevcut kullanıcı ile devam ediliyor: $NEW_USER" "$YELLOW"
-            # Sudo ve sshusers gruplarına ekle
-            sudo usermod -aG sudo "$NEW_USER"
-            sudo groupadd -f sshusers
-            sudo usermod -aG sshusers "$NEW_USER"
-            break
-            ;;
-        *)
-            print_message "❌ Geçersiz seçenek! Lütfen 1 veya 2 girin." "$RED"
-            ;;
-    esac
-done
+        fi
+        
+        break
+    done
+    
+    # Kullanıcı yoksa oluştur
+    if ! id "$NEW_USER" &>/dev/null; then
+        sudo adduser --disabled-password --gecos "" "$NEW_USER" > /dev/null 2>&1
+        
+        # Parola ayarı için döngü - parolalar eşleşene kadar sormaya devam et
+        while true; do
+            print_message "\n🔑 '$NEW_USER' için parola belirleyin:" "$BLUE"
+            print_message "(Parola görünmez, kopyala-yapıştır desteklenir)" "$YELLOW"
+            read -rs user_pass1
+            echo ""
+            print_message "Parolayı tekrar girin:" "$YELLOW"
+            read -rs user_pass2
+            echo ""
+            
+            if [[ "$user_pass1" == "$user_pass2" && -n "$user_pass1" ]]; then
+                echo "$NEW_USER:$user_pass1" | sudo chpasswd
+                if [[ $? -eq 0 ]]; then
+                    print_message "✅ Kullanıcı '$NEW_USER' oluşturuldu ve parola ayarlandı" "$GREEN"
+                    log_message "Kullanıcı $NEW_USER oluşturuldu"
+                    break
+                else
+                    print_message "❌ Parola ayarlanamadı, tekrar deneyin" "$RED"
+                fi
+            else
+                print_message "❌ Parolalar eşleşmiyor veya boş! Tekrar deneyin." "$RED"
+            fi
+        done
+    else
+        print_message "ℹ️  Mevcut kullanıcı '$NEW_USER' kullanılacak" "$YELLOW"
+    fi
+    
+    # Kullanıcıyı gruplara ekle
+    sudo usermod -aG sudo "$NEW_USER"
+    sudo groupadd -f sshusers
+    sudo usermod -aG sshusers "$NEW_USER"
+    
+    print_message "✅ Kullanıcı '$NEW_USER' sudo ve sshusers gruplarına eklendi" "$GREEN"
+}
 
 # SSH port ayarı
 configure_ssh_port() {
